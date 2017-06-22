@@ -1,0 +1,27 @@
+[package]
+name = "railcar"
+version = "0.1.0"
+authors = ["Vishvananda Ishaya Abrams <vish.ishaya@oracle.com>"]
+build = "build.rs"
+
+[dependencies]
+caps = "0.0.1"
+error-chain = "0.10.0"
+getopts = "0.2.14"
+lazy_static = "0.2.4"
+libc = "0.2.21"
+log = {version = "0.3.6", features = ["release_max_level_info"] }
+nix = "0.8.0"
+num-traits = "0.1.36"
+oci = { path = "oci" }
+prctl = "1.0.0"
+scopeguard = "0.3.2"
+# waiting for new seccomp-sys version for missing functions
+seccomp-sys = "0.1.2"
+
+[features]
+nightly = []
+
+[profile.release]
+lto = true
+panic = 'abort'
