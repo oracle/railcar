@@ -8,7 +8,9 @@
 `railcar` is a rust implementation of the oci-runtime spec. It is similar to
 the reference implementation `runc`, but it is implemented completely in rust
 for memory safety without needing the overhead of a garbage collector or
-multiple threads.
+multiple threads. For more information on the development of railcar, check out
+[Building a Container Runtime in
+Rust](https://blogs.oracle.com/developers/building-a-container-runtime-in-rust)
 
 ## Building `railcar` ##
 
