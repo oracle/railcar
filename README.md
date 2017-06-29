@@ -1,4 +1,7 @@
-# `railcar` - rust implementation of oci-runtime #
+# `railcar` - rust implementation of the oci-runtime spec #
+
+![railcar](https://github.com/oracle/railcar/raw/master/railcar.png
+"railcar")
 
 ## What is `railcar`? ##
 
