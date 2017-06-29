@@ -19,7 +19,7 @@ pub fn reset_effective() -> ::Result<()> {
     Ok(())
 }
 
-pub fn drop_privileges(cs: &Vec<LinuxCapabilityType>) -> ::Result<()> {
+pub fn drop_privileges(cs: &[LinuxCapabilityType]) -> ::Result<()> {
     let mut all = CapsHashSet::new();
     for c in Capability::iter_variants() {
         all.insert(c);

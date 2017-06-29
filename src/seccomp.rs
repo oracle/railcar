@@ -10,8 +10,8 @@ fn to_cmp(cmp: LinuxSeccompOperator) -> scmp_compare {
     unsafe { ::std::mem::transmute(cmp) }
 }
 
-fn syscall_resolve_name(name: &String) -> ::Result<i32> {
-    let s = ::std::ffi::CString::new(name.clone())?;
+fn syscall_resolve_name(name: &str) -> ::Result<i32> {
+    let s = ::std::ffi::CString::new(name)?;
     let id = unsafe { seccomp_syscall_resolve_name(s.as_ptr()) };
     if id == __NR_SCMP_ERROR {
         let msg = format!("could not resolve {}", name);
@@ -47,10 +47,11 @@ fn rule_add(ctx: *mut scmp_filter_ctx,
             cmps: &[scmp_arg_cmp])
             -> Result<()> {
     let res = unsafe {
-        let mut ptr = cmps.as_ptr();
-        if cmps.is_empty() {
-            ptr = ::std::ptr::null();
-        }
+        let ptr = if cmps.is_empty() {
+            ::std::ptr::null()
+        } else {
+            cmps.as_ptr()
+        };
         seccomp_rule_add_array(ctx, act, id, cmps.len() as u32, ptr)
     };
     if res != 0 {
@@ -89,11 +90,11 @@ pub fn initialize_seccomp(seccomp: &LinuxSeccomp) -> ::Result<()> {
     // set control NoNewPrivs to false, as we deal with it separately
     attr_set(ctx, scmp_filter_attr::SCMP_FLTATR_CTL_NNP, false as u32)?;
     // set up architectures
-    for arch in seccomp.architectures.iter() {
+    for arch in &seccomp.architectures {
         arch_add(ctx, to_arch(*arch))?;
     }
     // add actions for syscalls
-    for syscall in seccomp.syscalls.iter() {
+    for syscall in &seccomp.syscalls {
         let id = match syscall_resolve_name(&syscall.name) {
             Ok(result) => result,
             Err(e) => {
@@ -102,7 +103,7 @@ pub fn initialize_seccomp(seccomp: &LinuxSeccomp) -> ::Result<()> {
             }
         };
         let mut cmps = Vec::new();
-        for arg in syscall.args.iter() {
+        for arg in &syscall.args {
             cmps.push(scmp_arg_cmp {
                 arg: arg.index as u32,
                 op: to_cmp(arg.op),

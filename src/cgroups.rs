@@ -116,13 +116,13 @@ pub fn read_file(dir: &str, file: &str) -> Result<(String)> {
 pub fn path(key: &str, cgroups_path: &str) -> Option<String> {
     let mount = MOUNTS.get(key);
     let rel = PATHS.get(key);
-    return if mount.is_none() || rel.is_none() {
+    if mount.is_none() || rel.is_none() {
         None
     } else if rel.unwrap() == "/" {
         Some(format!{"{}{}", &mount.unwrap(), cgroups_path})
     } else {
         Some(format!{"{}{}{}", &mount.unwrap(), &rel.unwrap(), cgroups_path})
-    };
+    }
 }
 
 pub fn get_procs(key: &str, cgroups_path: &str) -> Vec<i32> {
@@ -265,7 +265,7 @@ fn copy_parent(dir: &str, file: &str) -> Result<()> {
     } else {
         bail!{"failed to find {} in parent cgroups", file};
     };
-    match read_file(&parent, file) {
+    match read_file(parent, file) {
         Err(Error(ErrorKind::Io(e), _)) => {
             if e.kind() == ::std::io::ErrorKind::NotFound {
                 // copy parent and then retry
@@ -355,7 +355,7 @@ fn blkio_apply(r: &LinuxResources, dir: &str) -> Result<()> {
         //       null as a zero value
         wrnz(dir, "blkio.weight", blkio.weight)?;
         wrnz(dir, "blkio.leaf_weight", blkio.leaf_weight)?;
-        for d in blkio.weight_device.iter() {
+        for d in &blkio.weight_device {
             // NOTE: runc writes zero values here. This may be a bug, but
             //       we are duplicating functionality.
             if let Some(w) = d.weight {
@@ -367,16 +367,16 @@ fn blkio_apply(r: &LinuxResources, dir: &str) -> Result<()> {
                 write_file(dir, "blkio.leaf_weight_device", &weight)?;
             }
         }
-        for ref d in blkio.throttle_read_bps_device.iter() {
+        for d in &blkio.throttle_read_bps_device {
             write_file(dir, "blkio.throttle.read_bps_device", &rate(d))?;
         }
-        for ref d in blkio.throttle_write_bps_device.iter() {
+        for d in &blkio.throttle_write_bps_device {
             write_file(dir, "blkio.throttle.write_bps_device", &rate(d))?;
         }
-        for ref d in blkio.throttle_read_iops_device.iter() {
+        for d in &blkio.throttle_read_iops_device {
             write_file(dir, "blkio.throttle.read_iops_device", &rate(d))?;
         }
-        for ref d in blkio.throttle_write_iops_device.iter() {
+        for d in &blkio.throttle_write_iops_device {
             write_file(dir, "blkio.throttle.write_iops_device", &rate(d))?;
         }
     }
@@ -403,7 +403,7 @@ fn net_cls_apply(r: &LinuxResources, dir: &str) -> Result<()> {
 
 fn net_prio_apply(r: &LinuxResources, dir: &str) -> Result<()> {
     if let Some(network) = r.network.as_ref() {
-        for ref p in network.priorities.iter() {
+        for p in &network.priorities {
             let prio = format!{"{} {}", p.name, p.priority};
             write_file(dir, "net_prio.ifpriomap", &prio)?;
         }
@@ -412,7 +412,7 @@ fn net_prio_apply(r: &LinuxResources, dir: &str) -> Result<()> {
 }
 
 fn hugetlb_apply(r: &LinuxResources, dir: &str) -> Result<()> {
-    for ref h in r.hugepage_limits.iter() {
+    for h in &r.hugepage_limits {
         let key = format!{"hugetlb.{}.limit_in_bytes", h.page_size};
         write_file(dir, &key, &h.limit.to_string())?;
     }
@@ -449,7 +449,7 @@ fn write_device(d: &LinuxDeviceCgroup, dir: &str) -> Result<()> {
 }
 
 fn devices_apply(r: &LinuxResources, dir: &str) -> Result<()> {
-    for ref d in r.devices.iter() {
+    for d in &r.devices {
         write_device(d, dir)?;
     }
     for d in super::DEFAULT_DEVICES.iter() {

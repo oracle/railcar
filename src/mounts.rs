@@ -25,15 +25,15 @@ pub fn init_rootfs(spec: &Spec,
         Some(ref linux) => {
             match linux.rootfs_propagation.as_ref() {
                 "shared" => {
-                    flags = flags | MS_SHARED;
+                    flags |= MS_SHARED;
                     Ok(())
                 }
                 "private" => {
-                    flags = flags | MS_PRIVATE;
+                    flags |= MS_PRIVATE;
                     Ok(())
                 }
                 "slave" | "" => {
-                    flags = flags | MS_SLAVE;
+                    flags |= MS_SLAVE;
                     Ok(())
                 }
                 _ => {
@@ -44,14 +44,14 @@ pub fn init_rootfs(spec: &Spec,
             }
         }
         None => {
-            flags = flags | MS_SLAVE;
+            flags |= MS_SLAVE;
             Ok(())
         }
     }?;
     let linux = spec.linux.as_ref().unwrap();
     mount(None::<&str>, "/", None::<&str>, flags, None::<&str>)?;
 
-    for m in spec.mounts.iter() {
+    for m in &spec.mounts {
         // TODO: check for nasty destinations involving symlinks and illegal
         //       locations.
         // NOTE: this strictly is less permissive than runc, which allows ..
@@ -63,16 +63,16 @@ pub fn init_rootfs(spec: &Spec,
         }
         let (flags, data) = parse_mount(m);
         if m.typ == "cgroup" {
-            mount_cgroups(&m, rootfs, flags, &data, &linux.mount_label, cpath)?;
+            mount_cgroups(m, rootfs, flags, &data, &linux.mount_label, cpath)?;
         } else if m.destination == "/dev" {
             // dev can't be read only yet because we have to mount devices
-            mount_from(&m,
+            mount_from(m,
                        rootfs,
                        flags & !MS_RDONLY,
                        &data,
                        &linux.mount_label)?;
         } else {
-            mount_from(&m, rootfs, flags, &data, &linux.mount_label)?;
+            mount_from(m, rootfs, flags, &data, &linux.mount_label)?;
         }
     }
 
@@ -109,16 +109,16 @@ pub fn pivot_rootfs<P: ?Sized + NixPath>(path: &P) -> Result<()> {
 
 pub fn finish_rootfs(spec: &Spec) -> Result<()> {
     if let Some(ref linux) = spec.linux {
-        for path in linux.masked_paths.iter() {
-            mask_path(&path)?;
+        for path in &linux.masked_paths {
+            mask_path(path)?;
         }
-        for path in linux.readonly_paths.iter() {
-            readonly_path(&path)?;
+        for path in &linux.readonly_paths {
+            readonly_path(path)?;
         }
     }
 
     // remount dev ro if necessary
-    for m in spec.mounts.iter() {
+    for m in &spec.mounts {
         if m.destination == "/dev" {
             let (flags, _) = parse_mount(m);
             if flags.contains(MS_RDONLY) {
@@ -195,7 +195,7 @@ fn mount_cgroups(m: &Mount,
     };
     let cflags = MS_NOEXEC | MS_NOSUID | MS_NODEV;
     // mount tmpfs for mounts
-    mount_from(&cm, rootfs, cflags, "", &label)?;
+    mount_from(&cm, rootfs, cflags, "", label)?;
     for (key, mount_path) in cgroups::MOUNTS.iter() {
         let source = if let Some(s) = cgroups::path(key, cpath) {
             s
@@ -221,7 +221,7 @@ fn mount_cgroups(m: &Mount,
             destination: dest,
             options: Vec::new(),
         };
-        mount_from(&bm, rootfs, flags | MS_BIND | MS_REC, &data, &label)?;
+        mount_from(&bm, rootfs, flags | MS_BIND | MS_REC, data, label)?;
         for k in key.split(',') {
             if k != key {
                 // try to create a symlink for combined strings
@@ -246,14 +246,14 @@ fn mount_cgroups(m: &Mount,
 fn parse_mount(m: &Mount) -> (MsFlags, String) {
     let mut flags = MsFlags::empty();
     let mut data = Vec::new();
-    for s in m.options.iter() {
+    for s in &m.options {
         match OPTIONS.get(s.as_str()) {
             Some(x) => {
                 let (clear, f) = *x;
                 if clear {
-                    flags = flags & !f;
+                    flags &= !f;
                 } else {
-                    flags = flags | f;
+                    flags |= f;
                 }
             }
             None => {
@@ -283,10 +283,11 @@ fn mount_from(m: &Mount,
 
     let dest = format!{"{}{}", rootfs, &m.destination};
 
-    let mut src = PathBuf::from(&m.source);
-    if m.typ == "bind" {
-        src = canonicalize(&m.source)?;
-    }
+    let src = if m.typ == "bind" {
+        canonicalize(&m.source)?
+    } else {
+        PathBuf::from(&m.source)
+    };
 
     debug!("mounting {} to {} as {} with data '{}'",
            &m.source,
@@ -308,7 +309,7 @@ fn mount_from(m: &Mount,
         // try again without mount label
         mount(Some(&*src), &*dest, Some(&*m.typ), flags, Some(data))?;
         // warn if label cannot be set
-        if let Err(e) = setfilecon(&dest, &label) {
+        if let Err(e) = setfilecon(&dest, label) {
             warn!{"could not set mount label of {} to {}: {}",
                   &m.destination, &label, e};
         }
@@ -340,11 +341,12 @@ fn default_symlinks() -> Result<()> {
     }
     Ok(())
 }
-fn create_devices(devices: &Vec<LinuxDevice>, bind: bool) -> Result<()> {
-    let mut op: fn(&LinuxDevice) -> Result<()> = mknod_dev;
-    if bind {
-        op = bind_dev;
-    }
+fn create_devices(devices: &[LinuxDevice], bind: bool) -> Result<()> {
+    let op: fn(&LinuxDevice) -> Result<()> = if bind {
+        bind_dev
+    } else {
+        mknod_dev
+    };
     let old = umask(Mode::from_bits_truncate(0o000));
     for dev in super::DEFAULT_DEVICES.iter() {
         op(dev)?;
@@ -379,8 +381,7 @@ fn makedev(major: u64, minor: u64) -> u64 {
 fn to_sflag(t: LinuxDeviceType) -> Result<SFlag> {
     Ok(match t {
         LinuxDeviceType::b => S_IFBLK,
-        LinuxDeviceType::c => S_IFCHR,
-        LinuxDeviceType::u => S_IFCHR,
+        LinuxDeviceType::c | LinuxDeviceType::u => S_IFCHR,
         LinuxDeviceType::p => S_IFIFO,
         LinuxDeviceType::a => {
             let msg = "type a is not allowed for linux device".to_string();
@@ -415,7 +416,7 @@ fn bind_dev(dev: &LinuxDevice) -> Result<()> {
 }
 
 fn mask_path(path: &str) -> Result<()> {
-    if !path.starts_with("/") || path.contains("..") {
+    if !path.starts_with('/') || path.contains("..") {
         let msg = format!("invalid maskedPath: {}", path);
         return Err(ErrorKind::InvalidSpec(msg).into());
     }
@@ -435,7 +436,7 @@ fn mask_path(path: &str) -> Result<()> {
 }
 
 fn readonly_path(path: &str) -> Result<()> {
-    if !path.starts_with("/") || path.contains("..") {
+    if !path.starts_with('/') || path.contains("..") {
         let msg = format!("invalid readonlyPath: {}", path);
         return Err(ErrorKind::InvalidSpec(msg).into());
     }

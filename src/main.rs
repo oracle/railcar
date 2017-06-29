@@ -138,7 +138,7 @@ const PROCESS_PID: &'static str = "process.pid";
 
 const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
 
-fn print_usage(program: &str, opts: Options) {
+fn print_usage(program: &str, opts: &Options) {
     let u = format!(r#"Usage: {} [options] <command> <container-id> [bundle-dir='.']
 
 Commands:
@@ -230,7 +230,7 @@ fn main() {
 fn run() -> Result<()> {
     let args = get_args();
 
-    let ref program = args[0];
+    let program = &args[0];
 
     let mut opts = Options::new();
     opts.optflag("h", "help", "display this help and exit");
@@ -255,7 +255,7 @@ fn run() -> Result<()> {
     if matches.opt_present("h") {
         println!("railcar - run container from oci runtime spec");
         println!("");
-        print_usage(&program, opts);
+        print_usage(program, &opts);
         return Ok(());
     }
 
@@ -265,15 +265,16 @@ fn run() -> Result<()> {
     }
 
     if matches.free.len() < 2 {
-        print_usage(&program, opts);
+        print_usage(program, &opts);
         bail!("command is required");
     }
 
-    let mut level = log::LogLevelFilter::Info;
+    let level = if matches.opt_present("v") {
+        log::LogLevelFilter::Debug
+    } else {
+        log::LogLevelFilter::Info
+    };
 
-    if matches.opt_present("v") {
-        level = log::LogLevelFilter::Debug;
-    }
 
     let _ = log::set_logger(|max_log_level| {
         max_log_level.set(level);
@@ -282,10 +283,11 @@ fn run() -> Result<()> {
 
     let command = &matches.free[0];
     let id = &matches.free[1];
-    if id.contains("..") || id.contains("/") {
+    if id.contains("..") || id.contains('/') {
         bail!("id {} may cannot contain '..' or '/'", id);
     }
-    let state_dir = matches.opt_str("r").unwrap_or("/run/railcar".to_string());
+    let state_dir = matches.opt_str("r")
+        .unwrap_or_else(|| "/run/railcar".to_string());
     debug!{"ensuring railcar state dir {}", &state_dir};
     let chain = || format!("ensuring railcar state dir {} failed", &state_dir);
     create_dir_all(&state_dir).chain_err(chain)?;
@@ -308,7 +310,7 @@ fn instance_dir(id: &str, state_dir: &str) -> String {
 }
 
 fn state(id: &str, status: &str, pid: i32, bundle: &str) -> oci::State {
-    return oci::State{
+    oci::State{
         version: "0.2.0".to_string(),
         id: id.to_string(),
         status: status.to_string(),
@@ -370,10 +372,11 @@ fn cmd_state(id: &str, state_dir: &str) -> Result<()> {
 fn cmd_create(id: &str, state_dir: &str,
               matches: &getopts::Matches) -> Result<()> {
     debug!("Performing create");
-    let mut bundle = matches.opt_str("b").unwrap_or(".".to_string());
-    if matches.free.len() >= 3 {
-        bundle = matches.free[2].clone();
-    }
+    let bundle = if matches.free.len() >= 3 {
+        matches.free[2].clone()
+    } else {
+        matches.opt_str("b").unwrap_or_else(|| ".".to_string())
+    };
     chdir(&*bundle).chain_err(|| format!("failed to chdir to {}", bundle))?;
     let spec =
         Spec::load(CONFIG).chain_err(|| format!("failed to load {}", CONFIG))?;
@@ -395,12 +398,12 @@ fn cmd_create(id: &str, state_dir: &str,
 
     chdir(&*dir).chain_err(|| format!("failed to chdir to {}", &dir))?;
 
-    let console = matches.opt_str("c").unwrap_or("".to_string());
+    let console = matches.opt_str("c").unwrap_or_default();
     if console != "" {
         let lnk = format!("{}/console", dir);
         symlink(&console, lnk)?;
     }
-    let pidfile = matches.opt_str("p").unwrap_or("".to_string());
+    let pidfile = matches.opt_str("p").unwrap_or_default();
 
     let child_pid = run_container(id,
                                   &rootfs,
@@ -422,7 +425,7 @@ fn cmd_create(id: &str, state_dir: &str,
         let linux = spec.linux.as_ref().unwrap();
         // update namespaces to enter only
         let mut namespaces = Vec::new();
-        for ns in linux.namespaces.iter() {
+        for ns in &linux.namespaces {
             let space = CloneFlags::from_bits_truncate(ns.typ as i32);
             if let Some(name) = NAMESPACES.get(&space) {
                 let path = format!("/proc/{}/ns/{}", child_pid, name);
@@ -556,7 +559,7 @@ fn cmd_ps(id: &str, state_dir: &str) -> Result<()> {
 fn cmd_delete(id: &str, state_dir: &str) -> Result<()> {
     debug!("Performing delete");
     let dir = instance_dir(id, state_dir);
-    if let Err(_) = chdir(&*dir) {
+    if  chdir(&*dir).is_err() {
         debug!("instance {} doesn't exist", id);
         warn!("returning zero to work around docker bug");
         return Ok(());
@@ -613,7 +616,7 @@ fn cmd_delete(id: &str, state_dir: &str) -> Result<()> {
         debug!{"running poststop hooks"};
         if let Some(ref hooks) = spec.hooks {
             let st = state_from_dir(id, state_dir)?;
-            for h in hooks.poststop.iter() {
+            for h in &hooks.poststop {
                 execute_hook(h, &st)
                 .chain_err(|| "failed to execute poststop hooks")?;
             }
@@ -634,10 +637,11 @@ fn cmd_delete(id: &str, state_dir: &str) -> Result<()> {
 }
 
 fn cmd_run(id: &str, matches: &getopts::Matches) -> Result<()> {
-    let mut bundle = ".";
-    if matches.free.len() >= 3 {
-        bundle = &matches.free[2];
-    }
+    let bundle = if matches.free.len() >= 3 {
+        &matches.free[2]
+    } else {
+        "."
+    };
     chdir(&*bundle).chain_err(|| format!("failed to chdir to {}", bundle))?;
     let spec =
         Spec::load(CONFIG).chain_err(|| format!("failed to load {}", CONFIG))?;
@@ -684,7 +688,7 @@ fn execute_hook(hook: &oci::Hook, state: &oci::State) -> Result<()> {
                     if let Some(signal) = sig {
                         // write signal to pipe.
                         let data: &[u8] = &[signal as u8];
-                        write(wfd, &data)
+                        write(wfd, data)
                             .chain_err(|| "failed to write signal hook")?;
                     }
                     close(wfd).chain_err(|| "could not close wfd")?;
@@ -722,20 +726,15 @@ fn run_container(id: &str,
                  init_only: bool,
                  daemonize: bool,
                  consolefd: RawFd) -> Result<(i32)> {
-    match prctl::set_dumpable(false) {
-        Err(i) => bail!(format!("set dumpable returned {}", i)),
-        Ok(_) => (),
+    if let Err(e) = prctl::set_dumpable(false) {
+        bail!(format!("set dumpable returned {}", e));
     };
 
     // if selinux is disabled, set will fail so print a warning
     if !spec.process.selinux_label.is_empty() {
-        match selinux::setexeccon(&spec.process.selinux_label) {
-            Err(e) => {
-                warn!("could not set label to {}: {}",
-                      spec.process.selinux_label,
-                      e);
-            }
-            Ok(_) => (),
+        if let Err(e) =  selinux::setexeccon(&spec.process.selinux_label) {
+            warn!("could not set label to {}: {}",
+                  spec.process.selinux_label, e);
         };
     }
 
@@ -755,13 +754,13 @@ fn run_container(id: &str,
     let mut cf = CloneFlags::empty();
     let mut to_enter = Vec::new();
     let mut enter_pid = false;
-    for ns in linux.namespaces.iter() {
+    for ns in &linux.namespaces {
         let space = CloneFlags::from_bits_truncate(ns.typ as i32);
         if space == CLONE_NEWPID {
             enter_pid = true;
         }
         if ns.path.is_empty() {
-            cf = cf | space;
+            cf |= space;
         } else {
             let fd =
                 open(&*ns.path, OFlag::empty(), Mode::empty()).chain_err(|| {
@@ -783,7 +782,7 @@ fn run_container(id: &str,
 
     let mut bind_devices = false;
     let mut userns = false;
-    let ref rlimits = spec.process.rlimits;
+    let rlimits = &spec.process.rlimits;
     // fork for userns and cgroups
     if cf.contains(CLONE_NEWUSER) {
         bind_devices = true;
@@ -791,13 +790,12 @@ fn run_container(id: &str,
     }
 
     if !daemonize {
-        match prctl::set_child_subreaper(true) {
-            Err(i) => bail!(format!("set subreaper returned {}", i)),
-            Ok(_) => (),
+        if let Err(e) = prctl::set_child_subreaper(true) {
+            bail!(format!("set subreaper returned {}", e));
         };
     }
     let (child_pid, wfd) = fork_first(id, init_pid, enter_pid, init_only, daemonize,
-                                      userns, &linux, rlimits, &cpath, &spec)?;
+                                      userns, linux, rlimits, &cpath, spec)?;
 
     // parent returns child pid and exits
     if child_pid != -1 {
@@ -806,7 +804,7 @@ fn run_container(id: &str,
 
     let mut mount_fd = -1;
     // enter path namespaces
-    for &(space, fd) in to_enter.iter() {
+    for &(space, fd) in &to_enter {
         if space == CLONE_NEWNS {
             // enter mount ns last
             mount_fd = fd;
@@ -869,7 +867,7 @@ fn run_container(id: &str,
     }
 
     if cf.contains(CLONE_NEWNS) {
-        mounts::init_rootfs(&spec, &rootfs, &cpath, bind_devices)
+        mounts::init_rootfs(spec, rootfs, &cpath, bind_devices)
             .chain_err(|| "failed to init rootfs")?;
     }
 
@@ -877,7 +875,7 @@ fn run_container(id: &str,
         // notify first parent that it can continue
         debug!{"writing zero to pipe to trigger prestart"};
         let data: &[u8] = &[0];
-        write(wfd, &data).chain_err(|| "failed to write zero")?;
+        write(wfd, data).chain_err(|| "failed to write zero")?;
     }
 
     if mount_fd != -1 {
@@ -891,7 +889,7 @@ fn run_container(id: &str,
         mounts::pivot_rootfs(&*rootfs).chain_err(|| "failed to pivot rootfs")?;
 
         // only set sysctls in newns
-        for (key, value) in linux.sysctl.iter() {
+        for (key, value) in &linux.sysctl {
             set_sysctl(key, value)?;
         }
 
@@ -900,7 +898,7 @@ fn run_container(id: &str,
         reopen_dev_null()?;
 
 
-        mounts::finish_rootfs(&spec).chain_err(|| "failed to finish rootfs")?;
+        mounts::finish_rootfs(spec).chain_err(|| "failed to finish rootfs")?;
     }
 
     // change to specified working directory
@@ -919,9 +917,8 @@ fn run_container(id: &str,
     // NOTE: if we want init to pass signals to other processes, we may want
     //       to hold on to cap kill until after the final fork.
     if spec.process.no_new_privileges {
-        match prctl::set_no_new_privileges(true) {
-            Err(i) => bail!(format!("set no_new_privs returned {}", i)),
-            Ok(_) => (),
+        if let Err(e) = prctl::set_no_new_privileges(true) {
+            bail!(format!("set no_new_privs returned {}", e));
         };
         // drop privileges
         capabilities::drop_privileges(&spec.process.capabilities)?;
@@ -945,7 +942,7 @@ fn run_container(id: &str,
     // notify first parent that it can continue
     debug!{"writing zero to pipe to trigger poststart"};
     let data: &[u8] = &[0];
-    write(wfd, &data).chain_err(|| "failed to write zero")?;
+    write(wfd, data).chain_err(|| "failed to write zero")?;
     if init_only {
         do_init(wfd, daemonize)?;
     }
@@ -962,7 +959,7 @@ fn fork_first(id: &str,
               daemonize: bool,
               userns: bool,
               linux: &Linux,
-              rlimits: &Vec<LinuxRlimit>,
+              rlimits: &[LinuxRlimit],
               cpath: &str,
               spec: &Spec)
               -> Result<(i32, RawFd)> {
@@ -1014,7 +1011,7 @@ fn fork_first(id: &str,
             }
             // setup cgroups
             let schild = child.to_string();
-            cgroups::apply(&linux.resources, &schild, &cpath)?;
+            cgroups::apply(&linux.resources, &schild, cpath)?;
             // notify child
             pcond.notify()
                 .chain_err(|| "failed to notify child")?;
@@ -1027,7 +1024,7 @@ fn fork_first(id: &str,
             let mut pid = -1;
             wait_for_pipe_zero(rfd, -1)?;
             // get the actual pid of the process from cgroup
-            let procs = cgroups::get_procs("cpuset", &cpath);
+            let procs = cgroups::get_procs("cpuset", cpath);
             for p in procs {
                 if p != init_pid {
                     debug!("actual pid of child is {}", p);
@@ -1039,7 +1036,7 @@ fn fork_first(id: &str,
                 debug!{"running prestart hooks"};
                 if let Some(ref hooks) = spec.hooks {
                     let st = state(id, "running", init_pid, &spec.root.path);
-                    for h in hooks.prestart.iter() {
+                    for h in &hooks.prestart {
                         execute_hook(h, &st)
                         .chain_err(|| "failed to execute prestart hooks")?;
                     }
@@ -1048,7 +1045,7 @@ fn fork_first(id: &str,
                 debug!{"running poststart hooks"};
                 if let Some(ref hooks) = spec.hooks {
                     let st = state(id, "running", init_pid, &spec.root.path);
-                    for h in hooks.poststart.iter() {
+                    for h in &hooks.poststart {
                         if let Err(e) = execute_hook(h, &st) {
                             warn!{"failed to execute poststart hook: {}", e};
                         }
@@ -1062,7 +1059,7 @@ fn fork_first(id: &str,
             signals::pass_signals(pid)?;
             let sig = wait_for_pipe_sig(rfd, -1)?;
             let (exit_code, _) = wait_for_child(pid)?;
-            cgroups::remove(&cpath)?;
+            cgroups::remove(cpath)?;
             exit(exit_code, sig)?;
         }
     };
@@ -1083,7 +1080,7 @@ fn fork_enter_pid(init: bool, daemonize: bool) -> Result<()> {
                     ForkResult::Child => {
                         // child continues
                     }
-                    ForkResult::Parent { child: _ } => {
+                    ForkResult::Parent { .. } => {
                         debug!{"third parent exiting for daemonization"};
                         exit(0, None)?;
                     }
@@ -1091,7 +1088,7 @@ fn fork_enter_pid(init: bool, daemonize: bool) -> Result<()> {
             }
             // child continues
         }
-        ForkResult::Parent { child: _ } => {
+        ForkResult::Parent { .. } => {
             debug!{"second parent exiting"};
             exit(0, None)?;
         }
@@ -1106,7 +1103,7 @@ fn fork_final_child(wfd: RawFd, daemonize: bool) -> Result<()> {
             // child continues on
             Ok(())
         }
-        ForkResult::Parent { child: _ } => {
+        ForkResult::Parent { .. } => {
             do_init(wfd, daemonize)?;
             Ok(())
         }
@@ -1138,7 +1135,7 @@ fn do_init(wfd: RawFd, daemonize: bool) -> Result<()> {
                     // raising from pid 1 doesn't work as you would
                     // expect, so write signal to pipe.
                     let data: &[u8] = &[s as u8];
-                    write(wfd, &data)
+                    write(wfd, data)
                         .chain_err(|| "failed to write signal")?;
                 }
                 close(wfd).chain_err(|| "could not close wfd")?;
@@ -1154,23 +1151,21 @@ fn do_init(wfd: RawFd, daemonize: bool) -> Result<()> {
     }
 }
 
-fn do_exec(path: &String, args: &[String], env: &[String]) -> Result<()> {
+fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
     let p = CString::new(path.to_string()).unwrap();
     let a: Vec<CString> = args.iter()
         .map(|s| {
-            CString::new(s.to_string())
-                .unwrap_or(CString::new("".to_string()).unwrap())
+            CString::new(s.to_string()).unwrap_or_default()
         })
         .collect();
     let env: Vec<CString> = env.iter()
         .map(|s| {
-            CString::new(s.to_string())
-                .unwrap_or(CString::new("".to_string()).unwrap())
+            CString::new(s.to_string()).unwrap_or_default()
         })
         .collect();
     // execvp doesn't use env for the search path, so we set env manually
     clearenv()?;
-    for ref e in env {
+    for e in &env {
         debug!{"adding {:?} to env", e};
         putenv(e)?;
     }
@@ -1179,7 +1174,7 @@ fn do_exec(path: &String, args: &[String], env: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn write_mappings(path: &str, maps: &Vec<LinuxIDMapping>) -> Result<()> {
+fn write_mappings(path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
     let mut data = String::new();
     for m in maps {
         let val = format!("{} {} {}\n", m.container_id, m.host_id, m.size);
@@ -1376,9 +1371,8 @@ fn reap_children() -> Result<(WaitStatus)> {
 
 fn setid(uid: u32, gid: u32) -> Result<()> {
     // set uid/gid
-    match prctl::set_keep_capabilities(true) {
-        Err(i) => bail!(format!("set keep capabilities returned {}", i)),
-        Ok(_) => (),
+    if let Err(e) = prctl::set_keep_capabilities(true) {
+        bail!(format!("set keep capabilities returned {}", e));
     };
     setresgid(gid, gid, gid)?;
     setresuid(uid, uid, uid)?;
@@ -1386,9 +1380,8 @@ fn setid(uid: u32, gid: u32) -> Result<()> {
     if uid != 0 {
         capabilities::reset_effective()?;
     }
-    match prctl::set_keep_capabilities(false) {
-        Err(i) => bail!(format!("set keep capabilities returned {}", i)),
-        Ok(_) => (),
+    if let Err(e) = prctl::set_keep_capabilities(false) {
+        bail!(format!("set keep capabilities returned {}", e));
     };
     Ok(())
 }
@@ -1414,9 +1407,8 @@ fn set_name(name: &str) -> Result<()> {
 
 #[cfg(not(feature = "nightly"))]
 fn set_name(name: &str) -> Result<()> {
-    match prctl::set_name(name) {
-        Err(i) => bail!(format!("set name returned {}", i)),
-        Ok(_) => (),
+    if let Err(e) = prctl::set_name(name) {
+         bail!(format!("set name returned {}", e));
     };
     Ok(())
 }

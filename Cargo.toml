@@ -16,7 +16,6 @@ num-traits = "0.1.36"
 oci = { path = "oci" }
 prctl = "1.0.0"
 scopeguard = "0.3.2"
-# waiting for new seccomp-sys version for missing functions
 seccomp-sys = "0.1.2"
 
 [features]
