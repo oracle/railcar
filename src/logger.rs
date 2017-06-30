@@ -11,10 +11,16 @@ impl Log for SimpleLogger {
 
     fn log(&self, record: &LogRecord) {
         if self.enabled(record.metadata()) {
-            eprintln!("{} - {}", record.level(), record.args());
+            println!("{} - {}", record.level(), record.args());
 
-            if let Ok(mut f) = OpenOptions::new().append(true).open("/home/vishvananda/railcar/log") {
-                f.write_all(format!{"{} = {}\n", record.level(), record.args()}.as_bytes()).unwrap();
+            if let Ok(mut f) = OpenOptions::new().append(true).open(
+                "/home/vishvananda/railcar/log",
+            )
+            {
+                f.write_all(
+                    format!{"{} = {}\n", record.level(), record.args()}
+                        .as_bytes(),
+                ).unwrap();
             };
         }
     }

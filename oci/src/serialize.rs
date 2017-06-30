@@ -49,8 +49,10 @@ impl From<serde_json::Error> for SerializeError {
     }
 }
 
-pub fn to_writer<W: io::Write, T: serde::Serialize>(obj: &T, mut writer: W)
-                                          -> Result<(), SerializeError> {
+pub fn to_writer<W: io::Write, T: serde::Serialize>(
+    obj: &T,
+    mut writer: W,
+) -> Result<(), SerializeError> {
     Ok(serde_json::to_writer(&mut writer, &obj)?)
 }
 
@@ -59,19 +61,23 @@ pub fn to_writer<W: io::Write, T: serde::Serialize>(obj: &T, mut writer: W)
 //     Ok(serde_json::from_reader(reader)?)
 // }
 
-pub fn serialize<T: serde::Serialize>(obj: &T, path: &str)
-                                      -> Result<(), SerializeError> {
+pub fn serialize<T: serde::Serialize>(
+    obj: &T,
+    path: &str,
+) -> Result<(), SerializeError> {
     let mut file = File::create(path)?;
     Ok(serde_json::to_writer(&mut file, &obj)?)
 }
 
-pub fn deserialize<T: serde::Deserialize>(path: &str)
-                                           -> Result<T, SerializeError> {
+pub fn deserialize<T: serde::Deserialize>(
+    path: &str,
+) -> Result<T, SerializeError> {
     let file = File::open(path)?;
     Ok(serde_json::from_reader(&file)?)
 }
 
-pub fn to_string<T: serde::Serialize>(obj: &T)
-                                      -> Result<String, SerializeError> {
+pub fn to_string<T: serde::Serialize>(
+    obj: &T,
+) -> Result<String, SerializeError> {
     Ok(serde_json::to_string(&obj)?)
 }

@@ -41,11 +41,12 @@ fn arch_add(ctx: *mut scmp_filter_ctx, arch: scmp_arch) -> ::Result<i32> {
     }
 }
 
-fn rule_add(ctx: *mut scmp_filter_ctx,
-            act: u32,
-            id: i32,
-            cmps: &[scmp_arg_cmp])
-            -> Result<()> {
+fn rule_add(
+    ctx: *mut scmp_filter_ctx,
+    act: u32,
+    id: i32,
+    cmps: &[scmp_arg_cmp],
+) -> Result<()> {
     let res = unsafe {
         let ptr = if cmps.is_empty() {
             ::std::ptr::null()
@@ -62,10 +63,11 @@ fn rule_add(ctx: *mut scmp_filter_ctx,
     }
 }
 
-fn attr_set(ctx: *mut scmp_filter_ctx,
-            attr: scmp_filter_attr,
-            value: u32)
-            -> Result<()> {
+fn attr_set(
+    ctx: *mut scmp_filter_ctx,
+    attr: scmp_filter_attr,
+    value: u32,
+) -> Result<()> {
     let res = unsafe { seccomp_attr_set(ctx, attr, value) };
     if res != 0 {
         let msg = "failed to set_attr".to_string();

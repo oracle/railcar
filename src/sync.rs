@@ -11,10 +11,7 @@ pub struct Cond {
 impl Cond {
     pub fn new() -> Result<Cond> {
         let (rfd, wfd) = pipe2(O_CLOEXEC)?;
-        Ok(Cond {
-            rfd: rfd,
-            wfd: wfd,
-        })
+        Ok(Cond { rfd: rfd, wfd: wfd })
     }
 
     pub fn wait(&self) -> Result<()> {
