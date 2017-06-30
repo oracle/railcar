@@ -104,7 +104,7 @@ process.
 `railcar` is an open source project. See [CONTRIBUTING](CONTRIBUTING.md) for
 details.
 
-Oracle gratefully acknowledges the contributions to smith that have been made
+Oracle gratefully acknowledges the contributions to railcar that have been made
 by the community.
 
 ## License ##
