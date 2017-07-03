@@ -304,10 +304,9 @@ fn run() -> Result<()> {
     if id.contains("..") || id.contains('/') {
         bail!("id {} may cannot contain '..' or '/'", id);
     }
-    let state_dir = matches.opt_str("r").unwrap_or_else(
-        || "/run/railcar".to_string(),
-    );
-    debug!{"ensuring railcar state dir {}", &state_dir};
+    let state_dir = matches.opt_str("r")
+        .unwrap_or_else(|| "/run/railcar".to_string());
+    debug!("ensuring railcar state dir {}", &state_dir);
     let chain = || format!("ensuring railcar state dir {} failed", &state_dir);
     create_dir_all(&state_dir).chain_err(chain)?;
     match command.as_ref() {
@@ -414,7 +413,7 @@ fn cmd_create(
         .into_owned();
 
     let dir = instance_dir(id, state_dir);
-    debug!{"creating state dir {}", &dir};
+    debug!("creating state dir {}", &dir);
     if let Err(e) = create_dir(&dir) {
         if e.kind() != std::io::ErrorKind::AlreadyExists {
             let chain = || format!("creating state dir {} failed", &dir);
@@ -437,11 +436,11 @@ fn cmd_create(
     let child_pid =
         run_container(id, &rootfs, &spec, -1, true, true, true, -1)?;
     if child_pid != -1 {
-        debug!{"writing init pid file {}", child_pid};
+        debug!("writing init pid file {}", child_pid);
         let mut f = File::create(INIT_PID)?;
         f.write_all(child_pid.to_string().as_bytes())?;
         if pidfile != "" {
-            debug!{"writing process {} pid to file {}", child_pid, pidfile};
+            debug!("writing process {} pid to file {}", child_pid, pidfile);
             let mut f = File::create(pidfile)?;
             f.write_all(child_pid.to_string().as_bytes())?;
         }
@@ -489,10 +488,9 @@ fn cmd_create(
             solaris: spec.solaris,
             windows: spec.windows,
         };
-        debug!{"writing updated config"};
-        updated.save(CONFIG).chain_err(
-            || format!("failed to save {}", CONFIG),
-        )?;
+        debug!("writing updated config");
+        updated.save(CONFIG)
+            .chain_err(|| format!("failed to save {}", CONFIG))?;
     }
     Ok(())
 }
@@ -662,7 +660,7 @@ fn cmd_delete(id: &str, state_dir: &str) -> Result<()> {
                 warn!("failed to remove cgroup dir: {}", e);
             }
         }
-        debug!{"running poststop hooks"};
+        debug!("running poststop hooks");
         if let Some(ref hooks) = spec.hooks {
             let st = state_from_dir(id, state_dir)?;
             for h in &hooks.poststop {
@@ -674,7 +672,7 @@ fn cmd_delete(id: &str, state_dir: &str) -> Result<()> {
     } else {
         debug!("config could not be loaded");
     }
-    debug!{"removing state dir {}", &dir};
+    debug!("removing state dir {}", &dir);
     if let Err(e) = remove_dir_all(&dir) {
         if e.kind() != std::io::ErrorKind::NotFound {
             let chain = || format!("removing state dir {} failed", &dir);
@@ -714,7 +712,7 @@ fn cmd_run(id: &str, matches: &getopts::Matches) -> Result<()> {
 }
 
 fn execute_hook(hook: &oci::Hook, state: &oci::State) -> Result<()> {
-    debug!{"executing hook {:?}", hook};
+    debug!("executing hook {:?}", hook);
     let (rfd, wfd) = pipe2(O_CLOEXEC).chain_err(|| "failed to create pipe")?;
     match fork()? {
         ForkResult::Child => {
@@ -920,7 +918,7 @@ fn run_container(
     if consolefd != -1 {
         setsid()?;
         if unsafe { libc::ioctl(consolefd, libc::TIOCSCTTY) } < 0 {
-            warn!{"could not TIOCSCTTY"};
+            warn!("could not TIOCSCTTY");
         };
         dup2(consolefd, 0).chain_err(
             || "could not dup tty to stdin",
@@ -946,7 +944,7 @@ fn run_container(
 
     if !init_only {
         // notify first parent that it can continue
-        debug!{"writing zero to pipe to trigger prestart"};
+        debug!("writing zero to pipe to trigger prestart");
         let data: &[u8] = &[0];
         write(wfd, data).chain_err(|| "failed to write zero")?;
     }
@@ -984,7 +982,7 @@ fn run_container(
         chdir(&*spec.process.cwd)?;
     }
 
-    debug!{"setting ids"};
+    debug!("setting ids");
 
     // set uid/gid/groups
     setid(spec.process.user.uid, spec.process.user.gid)?;
@@ -1018,7 +1016,7 @@ fn run_container(
         fork_final_child(wfd, daemonize)?;
     }
     // notify first parent that it can continue
-    debug!{"writing zero to pipe to trigger poststart"};
+    debug!("writing zero to pipe to trigger poststart");
     let data: &[u8] = &[0];
     write(wfd, data).chain_err(|| "failed to write zero")?;
     if init_only {
@@ -1112,7 +1110,7 @@ fn fork_first(
                 }
             }
             if !init_only {
-                debug!{"running prestart hooks"};
+                debug!("running prestart hooks");
                 if let Some(ref hooks) = spec.hooks {
                     let st = state(id, "running", init_pid, &spec.root.path);
                     for h in &hooks.prestart {
@@ -1122,18 +1120,18 @@ fn fork_first(
                     }
                 }
                 wait_for_pipe_zero(rfd, -1)?;
-                debug!{"running poststart hooks"};
+                debug!("running poststart hooks");
                 if let Some(ref hooks) = spec.hooks {
                     let st = state(id, "running", init_pid, &spec.root.path);
                     for h in &hooks.poststart {
                         if let Err(e) = execute_hook(h, &st) {
-                            warn!{"failed to execute poststart hook: {}", e};
+                            warn!("failed to execute poststart hook: {}", e);
                         }
                     }
                 }
             }
             if daemonize {
-                debug!{"first parent exiting for daemonization"};
+                debug!("first parent exiting for daemonization");
                 return Ok((pid, wfd));
             }
             signals::pass_signals(pid)?;
@@ -1161,7 +1159,7 @@ fn fork_enter_pid(init: bool, daemonize: bool) -> Result<()> {
                         // child continues
                     }
                     ForkResult::Parent { .. } => {
-                        debug!{"third parent exiting for daemonization"};
+                        debug!("third parent exiting for daemonization");
                         exit(0, None)?;
                     }
                 }
@@ -1169,7 +1167,7 @@ fn fork_enter_pid(init: bool, daemonize: bool) -> Result<()> {
             // child continues
         }
         ForkResult::Parent { .. } => {
-            debug!{"second parent exiting"};
+            debug!("second parent exiting");
             exit(0, None)?;
         }
     };
@@ -1241,7 +1239,7 @@ fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
     // execvp doesn't use env for the search path, so we set env manually
     clearenv()?;
     for e in &env {
-        debug!{"adding {:?} to env", e};
+        debug!("adding {:?} to env", e);
         putenv(e)?;
     }
     execvp(&p, &a).chain_err(|| "failed to exec")?;
@@ -1271,7 +1269,7 @@ fn set_sysctl(key: &str, value: &str) -> Result<()> {
                 let msg = format!("could not set sysctl {} to {}", key, value);
                 Err(e).chain_err(|| msg)?;
             }
-            warn!{"could not set {} because it doesn't exist", key};
+            warn!("could not set {} because it doesn't exist", key);
             return Ok(());
         }
         Ok(fd) => fd,
@@ -1336,7 +1334,7 @@ fn wait_for_pipe_vec(
         }
         if !events.unwrap().intersects(POLLIN | POLLHUP) {
             // continue on other events (should not happen)
-            debug!{"got a continue on other events {:?}", events};
+            debug!("got a continue on other events {:?}", events);
             continue;
         }
         let data: &mut [u8] = &mut [0];
