@@ -1,0 +1,30 @@
+box: scorpil/rust:stable
+build:
+  steps:
+    - install-packages:
+      packages: libseccomp-dev build-essential
+    - script:
+        name: cargo deps
+        code: cargo install cargo-when
+    - script:
+        name: build
+        code: ./build.sh
+
+#TODO(termie): this won't work yet, we need a base box that is
+#              musl-y
+build-musl:
+  steps:
+    - install-packages:
+        packages: build-essential libseccomp-dev dh-autoreconf musl-tools git
+    - script:
+        name: build seccomp
+        code: |
+          git submodule update --init
+          ./build_seccomp.sh
+    - script:
+        name: cargo deps
+        code: cargo install cargo-when
+    - script:
+        name: build
+        code: |
+          TARGET=x86_64-unknown-linux-musl ./build.sh
