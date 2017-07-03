@@ -10,9 +10,24 @@ build:
         name: build
         code: ./build.sh
 
+build-nightly:
+  box: scorpil/rust:nightly
+  steps:
+    - install-packages:
+      packages: libseccomp-dev build-essential
+    - script:
+        name: cargo deps
+        code: cargo install cargo-when
+    - script:
+        name: build
+        code: ./build.sh
+
+
+
 #TODO(termie): this won't work yet, we need a base box that is
 #              musl-y
 build-musl:
+  box: ekidd/rust-musl-builder:stable
   steps:
     - install-packages:
         packages: build-essential libseccomp-dev dh-autoreconf musl-tools git
