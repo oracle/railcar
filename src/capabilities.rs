@@ -5,10 +5,12 @@ fn to_cap(cap: LinuxCapabilityType) -> Capability {
     unsafe { ::std::mem::transmute(cap) }
 }
 
-const ALL_CAP_SETS: &'static [CapSet] = &[CapSet::Effective,
-                                          CapSet::Permitted,
-                                          CapSet::Inheritable,
-                                          CapSet::Ambient];
+const ALL_CAP_SETS: &'static [CapSet] = &[
+    CapSet::Effective,
+    CapSet::Permitted,
+    CapSet::Inheritable,
+    CapSet::Ambient,
+];
 
 pub fn reset_effective() -> ::Result<()> {
     let mut all = CapsHashSet::new();

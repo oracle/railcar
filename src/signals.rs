@@ -27,12 +27,24 @@ extern "C" fn child_handler(signo: c_int) {
 
 unsafe fn set_handler(handler: SigHandler) -> Result<()> {
     let a = SigAction::new(handler, SaFlags::empty(), SigSet::all());
-    sigaction(Signal::SIGTERM, &a).chain_err(|| "failed to sigaction")?;
-    sigaction(Signal::SIGQUIT, &a).chain_err(|| "failed to sigaction")?;
-    sigaction(Signal::SIGINT, &a).chain_err(|| "failed to sigaction")?;
-    sigaction(Signal::SIGHUP, &a).chain_err(|| "failed to sigaction")?;
-    sigaction(Signal::SIGUSR1, &a).chain_err(|| "failed to sigaction")?;
-    sigaction(Signal::SIGUSR2, &a).chain_err(|| "failed to sigaction")?;
+    sigaction(Signal::SIGTERM, &a).chain_err(
+        || "failed to sigaction",
+    )?;
+    sigaction(Signal::SIGQUIT, &a).chain_err(
+        || "failed to sigaction",
+    )?;
+    sigaction(Signal::SIGINT, &a).chain_err(
+        || "failed to sigaction",
+    )?;
+    sigaction(Signal::SIGHUP, &a).chain_err(
+        || "failed to sigaction",
+    )?;
+    sigaction(Signal::SIGUSR1, &a).chain_err(
+        || "failed to sigaction",
+    )?;
+    sigaction(Signal::SIGUSR2, &a).chain_err(
+        || "failed to sigaction",
+    )?;
     Ok(())
 }
 
@@ -78,12 +90,15 @@ pub fn to_signal(signal: &str) -> Result<Signal> {
         "29" | "IO" | "SIGIO" => Signal::SIGIO,
         "30" | "PWR" | "SIGPWR" => Signal::SIGPWR,
         "31" | "SYS" | "SIGSYS" => Signal::SIGSYS,
-        _ => bail!{"{} is not a valid signal", signal}
+        _ => bail!{"{} is not a valid signal", signal},
     })
 }
 
 
-pub fn signal_process<T: Into<Option<Signal>>>(pid: i32, signal: T) -> Result<()> {
+pub fn signal_process<T: Into<Option<Signal>>>(
+    pid: i32,
+    signal: T,
+) -> Result<()> {
     kill(pid, signal)?;
     Ok(())
 }
@@ -100,10 +115,11 @@ pub fn raise_for_parent(signal: Signal) -> Result<()> {
     // make sure the signal is unblocked
     let mut s = SigSet::empty();
     s.add(signal);
-    s.thread_unblock()
-        .chain_err(|| "failed to unblock signal")?;
+    s.thread_unblock().chain_err(|| "failed to unblock signal")?;
     // raise the signal
-    raise(signal).chain_err(|| format!("failed to raise signal {:?}", signal))?;
+    raise(signal).chain_err(|| {
+        format!("failed to raise signal {:?}", signal)
+    })?;
     Ok(())
 }
 

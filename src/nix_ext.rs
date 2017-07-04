@@ -5,18 +5,21 @@ use std::os::unix::io::RawFd;
 use std::ffi::CString;
 
 #[inline]
-pub fn lsetxattr(path: &CString,
-                 name: &CString,
-                 value: &CString,
-                 len: usize,
-                 flags: i32)
-                 -> Result<()> {
+pub fn lsetxattr(
+    path: &CString,
+    name: &CString,
+    value: &CString,
+    len: usize,
+    flags: i32,
+) -> Result<()> {
     let res = unsafe {
-        libc::lsetxattr(path.as_ptr(),
-                        name.as_ptr(),
-                        value.as_ptr() as *const libc::c_void,
-                        len,
-                        flags)
+        libc::lsetxattr(
+            path.as_ptr(),
+            name.as_ptr(),
+            value.as_ptr() as *const libc::c_void,
+            len,
+            flags,
+        )
     };
     Errno::result(res).map(drop)
 }
@@ -34,10 +37,11 @@ pub fn setgroups(gids: &[libc::gid_t]) -> Result<()> {
 }
 
 #[inline]
-pub fn setrlimit(resource: libc::c_int,
-                 soft: libc::c_ulonglong,
-                 hard: libc::c_ulonglong)
-                 -> Result<()> {
+pub fn setrlimit(
+    resource: libc::c_int,
+    soft: libc::c_ulonglong,
+    hard: libc::c_ulonglong,
+) -> Result<()> {
     let rlim = &libc::rlimit {
         rlim_cur: soft,
         rlim_max: hard,

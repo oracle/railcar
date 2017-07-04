@@ -15,10 +15,11 @@ pub fn init() {
     initialize(&APPLIES);
 }
 
-pub fn apply(resources: &Option<LinuxResources>,
-             pid: &str,
-             cgroups_path: &str)
-             -> Result<()> {
+pub fn apply(
+    resources: &Option<LinuxResources>,
+    pid: &str,
+    cgroups_path: &str,
+) -> Result<()> {
     for key in MOUNTS.keys() {
         let dir = if let Some(s) = path(key, cgroups_path) {
             s
@@ -62,10 +63,11 @@ pub fn remove(cgroups_path: &str) -> Result<()> {
 }
 
 #[inline]
-fn wrnz<T: ToString + Zero>(dir: &str,
-                            key: &str,
-                            value: Option<T>)
-                            -> Result<()> {
+fn wrnz<T: ToString + Zero>(
+    dir: &str,
+    key: &str,
+    value: Option<T>,
+) -> Result<()> {
     match value {
         Some(val) => {
             if !val.is_zero() {
@@ -79,10 +81,11 @@ fn wrnz<T: ToString + Zero>(dir: &str,
 }
 
 #[inline]
-fn try_wrnz<T: ToString + Zero>(dir: &str,
-                                key: &str,
-                                value: Option<T>)
-                                -> Result<()> {
+fn try_wrnz<T: ToString + Zero>(
+    dir: &str,
+    key: &str,
+    value: Option<T>,
+) -> Result<()> {
     match wrnz(dir, key, value) {
         Err(Error(ErrorKind::Io(e), x)) => {
             if e.kind() == ::std::io::ErrorKind::PermissionDenied {
@@ -121,7 +124,9 @@ pub fn path(key: &str, cgroups_path: &str) -> Option<String> {
     } else if rel.unwrap() == "/" {
         Some(format!{"{}{}", &mount.unwrap(), cgroups_path})
     } else {
-        Some(format!{"{}{}{}", &mount.unwrap(), &rel.unwrap(), cgroups_path})
+        Some(
+            format!{"{}{}{}", &mount.unwrap(), &rel.unwrap(), cgroups_path},
+        )
     }
 }
 
