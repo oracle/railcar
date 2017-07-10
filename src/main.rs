@@ -257,7 +257,7 @@ fn run() -> Result<()> {
     opts.optopt(
         "p",
         "pid-file",
-        "additonal location to write pid",
+        "additional location to write pid",
         "PID-FILE",
     );
     opts.optopt("c", "console", "console to use", "CONSOLE");
