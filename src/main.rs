@@ -777,7 +777,7 @@ fn run_container(
     spec: &Spec,
     init_pid: i32,
     mut init: bool,
-    init_only: bool,
+    mut init_only: bool,
     daemonize: bool,
     consolefd: RawFd,
 ) -> Result<(i32)> {
@@ -830,6 +830,7 @@ fn run_container(
     }
     if !enter_pid {
         init = false;
+        init_only = false;
     }
 
 
