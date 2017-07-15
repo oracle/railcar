@@ -304,8 +304,9 @@ fn run() -> Result<()> {
     if id.contains("..") || id.contains('/') {
         bail!("id {} may cannot contain '..' or '/'", id);
     }
-    let state_dir = matches.opt_str("r")
-        .unwrap_or_else(|| "/run/railcar".to_string());
+    let state_dir = matches.opt_str("r").unwrap_or_else(
+        || "/run/railcar".to_string(),
+    );
     debug!("ensuring railcar state dir {}", &state_dir);
     let chain = || format!("ensuring railcar state dir {} failed", &state_dir);
     create_dir_all(&state_dir).chain_err(chain)?;
@@ -489,8 +490,9 @@ fn cmd_create(
             windows: spec.windows,
         };
         debug!("writing updated config");
-        updated.save(CONFIG)
-            .chain_err(|| format!("failed to save {}", CONFIG))?;
+        updated.save(CONFIG).chain_err(
+            || format!("failed to save {}", CONFIG),
+        )?;
     }
     Ok(())
 }

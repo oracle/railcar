@@ -9,9 +9,11 @@ fn main() {
         let mut cmd = Command::new("./build_seccomp.sh");
         let output = cmd.output().expect("cmd failed to start");
         if !output.status.success() {
-            println!("failed to build libseccomp:\n{}\n{}",
-                   &std::str::from_utf8(&output.stdout).unwrap(),
-                   &std::str::from_utf8(&output.stderr).unwrap());
+            println!(
+                "failed to build libseccomp:\n{}\n{}",
+                &std::str::from_utf8(&output.stdout).unwrap(),
+                &std::str::from_utf8(&output.stderr).unwrap()
+            );
             let mut f = File::open("libseccomp/config.log").unwrap();
             let mut result = String::new();
             f.read_to_string(&mut result).unwrap();
@@ -25,4 +27,3 @@ fn main() {
         println!("cargo:rustc-link-lib=static=seccomp");
     }
 }
-

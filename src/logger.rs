@@ -10,8 +10,12 @@ impl Log for SimpleLogger {
 
     fn log(&self, record: &LogRecord) {
         if self.enabled(record.metadata()) {
-            let _ = writeln!(&mut stderr(), "{} - {}",
-                record.level(), record.args());
+            let _ = writeln!(
+                &mut stderr(),
+                "{} - {}",
+                record.level(),
+                record.args()
+            );
         }
     }
 }
