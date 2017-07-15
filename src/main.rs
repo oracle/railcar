@@ -6,8 +6,9 @@ extern crate alloc_system;
 
 extern crate caps;
 #[macro_use]
+extern crate clap;
+#[macro_use]
 extern crate error_chain;
-extern crate getopts;
 #[macro_use]
 extern crate lazy_static;
 extern crate libc;
@@ -32,8 +33,8 @@ mod selinux;
 mod signals;
 mod nix_ext;
 
+use clap::{Arg, ArgMatches, App, AppSettings, SubCommand};
 use errors::*;
-use getopts::Options;
 use lazy_static::initialize;
 use nix::fcntl::{open, OFlag, O_RDWR, O_RDONLY, O_WRONLY, O_CLOEXEC, O_NOCTTY};
 use nix::poll::{poll, PollFd, POLLIN, POLLHUP, POLLNVAL, EventFlags};
@@ -55,6 +56,7 @@ use std::fs::{File, create_dir, create_dir_all, remove_dir_all, canonicalize};
 use std::io::{Read, Write};
 use std::os::unix::fs::symlink;
 use std::os::unix::io::{RawFd, FromRawFd};
+use std::result::Result as StdResult;
 use sync::Cond;
 
 lazy_static! {
@@ -136,26 +138,6 @@ const CONFIG: &'static str = "config.json";
 const INIT_PID: &'static str = "init.pid";
 const PROCESS_PID: &'static str = "process.pid";
 
-const VERSION: Option<&'static str> = option_env!("CARGO_PKG_VERSION");
-
-fn print_usage(program: &str, opts: &Options) {
-    let u = format!(
-        r#"Usage: {} [options] <command> <container-id> [bundle-dir='.']
-
-Commands:
-
-    run     run a container
-    create  create a container (to be started later)
-    start   start a (previously created) container
-    state   get the (json) state of a (previously created) container
-    kill    signal a (previously created) container
-    delete  delete a (previously created) container
-    ps      list processes in a (previously created) container"#,
-        program
-    );
-    print!("{}", opts.usage(&u));
-}
-
 #[cfg(feature = "nightly")]
 static mut ARGC: isize = 0 as isize;
 #[cfg(feature = "nightly")]
@@ -230,95 +212,228 @@ fn main() {
     ::std::process::exit(0);
 }
 
+fn id_validator(val: String) -> StdResult<(), String> {
+    if val.contains("..") || val.contains('/') {
+        return Err(format!("id {} may cannot contain '..' or '/'", val));
+    }
+    Ok(())
+}
 fn run() -> Result<()> {
-    let args = get_args();
-
-    let program = &args[0];
-
-    let mut opts = Options::new();
-    opts.optflag("h", "help", "display this help and exit");
-    opts.optflag("V", "version", "output version information and exit");
-    opts.optflag("v", "verbose", "enable more verbose logging");
-    opts.optflag("n", "no-init", "do not create an init process");
-    opts.optflag("o", "only-init", "do not exec process (exits on signal)");
-    opts.optflag("d", "daemonize", "daemonize the process");
-    opts.optopt(
-        "b",
-        "bundle",
-        "bundle directory (defaults to '.')",
-        "BUNDLE",
-    );
-    opts.optopt(
-        "r",
-        "root",
-        "dir for state (defaults to '/run/railcar')",
-        "ROOT",
-    );
-    opts.optopt(
-        "p",
-        "pid-file",
-        "additional location to write pid",
-        "PID-FILE",
-    );
-    opts.optopt("c", "console", "console to use", "CONSOLE");
-    opts.optopt("f", "format", "compatibility (ignored)", "IGNORED");
-    opts.optopt("", "log", "compatibility (ignored)", "IGNORED");
-    opts.optopt("", "log-format", "compatibility (ignored)", "IGNORED");
-    opts.optflag("", "all", "compatibility (ignored)");
-
-    let matches = opts.parse(&args[1..]).chain_err(
-        || "unable to parse options",
-    )?;
-
-    if matches.opt_present("h") {
-        println!("railcar - run container from oci runtime spec");
-        println!("");
-        print_usage(program, &opts);
-        return Ok(());
-    }
-
-    if matches.opt_present("V") {
-        println!("{} version: {}", program, VERSION.unwrap_or("unknown"));
-        return Ok(());
-    }
-
-    if matches.free.len() < 2 {
-        print_usage(program, &opts);
-        bail!("command is required");
-    }
-
-    let level = if matches.opt_present("v") {
-        log::LogLevelFilter::Debug
-    } else {
-        log::LogLevelFilter::Info
+    let matches = App::new("Railcar")
+        .about("Railcar - run conatiner from oci runtime spec")
+        .author(crate_authors!("\n"))
+        .setting(AppSettings::SubcommandRequired)
+        .version(crate_version!())
+        .arg(
+            Arg::with_name("v")
+                .multiple(true)
+                .help("Sets the level of verbosity")
+                .short("v"),
+        )
+        .arg(
+            Arg::with_name("d")
+                .help("daemonize the process")
+                .long("daemonize")
+                .short("d"),
+        )
+        .arg(
+            Arg::with_name("log")
+                .help("compatibility (ignored)")
+                .long("log")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("log-format")
+                .help("compatibility (ignored)")
+                .long("log-format")
+                .takes_value(true),
+        )
+        .arg(
+            Arg::with_name("n")
+                .help("do not create an init process")
+                .long("no-init")
+                .short("n"),
+        )
+        .arg(
+            Arg::with_name("o")
+                .help("do not exec process (exits on signal)")
+                .long("only-init")
+                .short("o"),
+        )
+        .arg(
+            Arg::with_name("r")
+                .default_value("/run/railcar")
+                .help("dir for state")
+                .long("root")
+                .short("r")
+                .takes_value(true),
+        )
+        .subcommand(
+            SubCommand::with_name("run")
+                .arg(
+                    Arg::with_name("bundle")
+                        .default_value(".")
+                        .required(true)
+                        .long("bundle")
+                        .short("b"),
+                )
+                .arg(Arg::with_name("id").required(true).takes_value(true))
+                .arg(
+                    Arg::with_name("p")
+                        .help("additional location to write pid")
+                        .long("pid-file")
+                        .short("p")
+                        .takes_value(true),
+                )
+                .help("run a container"),
+        )
+        .subcommand(
+            SubCommand::with_name("create")
+                .arg(
+                    Arg::with_name("bundle")
+                        .default_value(".")
+                        .required(true)
+                        .long("bundle")
+                        .short("b"),
+                )
+                .arg(
+                    Arg::with_name("c")
+                        .help("console to use")
+                        .long("console")
+                        .short("c")
+                        .takes_value(true),
+                )
+                .arg(Arg::with_name("id").required(true).takes_value(true))
+                .arg(
+                    Arg::with_name("p")
+                        .help("additional location to write pid")
+                        .long("pid-file")
+                        .short("p")
+                        .takes_value(true),
+                )
+                .help("create a container (to be started later)"),
+        )
+        .subcommand(
+            SubCommand::with_name("start")
+                .arg(Arg::with_name("id").required(true).takes_value(true))
+                .help("start a (previously created) container"),
+        )
+        .subcommand(
+            SubCommand::with_name("state")
+                .arg(
+                    Arg::with_name("id")
+                        .required(true)
+                        .takes_value(true)
+                        .validator(id_validator),
+                )
+                .help(
+                    "get the (json) state of a (previously created) container",
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("kill")
+                .arg(
+                    Arg::with_name("id")
+                        .required(true)
+                        .takes_value(true)
+                        .validator(id_validator),
+                )
+                .arg(
+                    Arg::with_name("a")
+                        .help("compatibility (ignored)")
+                        .long("all")
+                        .short("a")
+                        .takes_value(true),
+                )
+                .arg(
+                    Arg::with_name("signal")
+                        .default_value("TERM")
+                        .required(true)
+                        .takes_value(true),
+                )
+                .help("signal a (previously created) container"),
+        )
+        .subcommand(
+            SubCommand::with_name("delete")
+                .arg(
+                    Arg::with_name("id")
+                        .required(true)
+                        .takes_value(true)
+                        .validator(id_validator),
+                )
+                .help("delete a (previously created) container"),
+        )
+        .subcommand(
+            SubCommand::with_name("ps")
+                .arg(
+                    Arg::with_name("id")
+                        .required(true)
+                        .takes_value(true)
+                        .validator(id_validator),
+                )
+                .arg(
+                    Arg::with_name("f")
+                        .help("compatibility (ignored)")
+                        .long("format")
+                        .short("f")
+                        .takes_value(true),
+                )
+                .help("list processes in a (previously created) container"),
+        )
+        .get_matches_from(get_args());
+    let level = match matches.occurrences_of("v") {
+        0 => log::LogLevelFilter::Info, //default
+        1 => log::LogLevelFilter::Warn,
+        2 => log::LogLevelFilter::Error,
+        3 => log::LogLevelFilter::Debug,
+        _ => log::LogLevelFilter::Trace,
     };
-
 
     let _ = log::set_logger(|max_log_level| {
         max_log_level.set(level);
         Box::new(logger::SimpleLogger)
     });
 
-    let command = &matches.free[0];
-    let id = &matches.free[1];
-    if id.contains("..") || id.contains('/') {
-        bail!("id {} may cannot contain '..' or '/'", id);
-    }
-    let state_dir = matches.opt_str("r").unwrap_or_else(
-        || "/run/railcar".to_string(),
-    );
+    let state_dir = matches.value_of("r").unwrap().to_string();
     debug!("ensuring railcar state dir {}", &state_dir);
     let chain = || format!("ensuring railcar state dir {} failed", &state_dir);
     create_dir_all(&state_dir).chain_err(chain)?;
-    match command.as_ref() {
-        "state" => cmd_state(id, &state_dir),
-        "create" => cmd_create(id, &state_dir, &matches),
-        "start" => cmd_start(id, &state_dir, &matches),
-        "kill" => cmd_kill(id, &state_dir, &matches),
-        "ps" => cmd_ps(id, &state_dir),
-        "delete" => cmd_delete(id, &state_dir),
-        // state dir is ignored for run
-        "run" => cmd_run(id, &matches),
+
+    match matches.subcommand() {
+        ("create", Some(create_matches)) => {
+            cmd_create(
+                create_matches.value_of("id").unwrap(),
+                &state_dir,
+                create_matches,
+            )
+        }
+        ("delete", Some(delete_matches)) => {
+            cmd_delete(delete_matches.value_of("id").unwrap(), &state_dir)
+        }
+        ("kill", Some(kill_matches)) => {
+            cmd_kill(
+                kill_matches.value_of("id").unwrap(),
+                &state_dir,
+                kill_matches,
+            )
+        }
+        ("ps", Some(ps_matches)) => {
+            cmd_ps(ps_matches.value_of("id").unwrap(), &state_dir)
+        }
+        ("run", Some(run_matches)) => {
+            cmd_run(run_matches.value_of("id").unwrap(), run_matches)
+        }
+        ("start", Some(start_matches)) => {
+            cmd_start(
+                start_matches.value_of("id").unwrap(),
+                &state_dir,
+                start_matches,
+            )
+        }
+        ("state", Some(state_matches)) => {
+            cmd_state(state_matches.value_of("id").unwrap(), &state_dir)
+        }
+        // We should never reach here because clap already enforces this
         _ => bail!("command not recognized"),
     }
 }
@@ -390,17 +505,9 @@ fn cmd_state(id: &str, state_dir: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_create(
-    id: &str,
-    state_dir: &str,
-    matches: &getopts::Matches,
-) -> Result<()> {
+fn cmd_create(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     debug!("Performing create");
-    let bundle = if matches.free.len() >= 3 {
-        matches.free[2].clone()
-    } else {
-        matches.opt_str("b").unwrap_or_else(|| ".".to_string())
-    };
+    let bundle = matches.value_of("bundle").unwrap();
     chdir(&*bundle).chain_err(
         || format!("failed to chdir to {}", bundle),
     )?;
@@ -427,12 +534,12 @@ fn cmd_create(
         || format!("failed to chdir to {}", &dir),
     )?;
 
-    let console = matches.opt_str("c").unwrap_or_default();
+    let console = matches.value_of("c").unwrap_or_default();
     if console != "" {
         let lnk = format!("{}/console", dir);
         symlink(&console, lnk)?;
     }
-    let pidfile = matches.opt_str("p").unwrap_or_default();
+    let pidfile = matches.value_of("p").unwrap_or_default();
 
     let child_pid =
         run_container(id, &rootfs, &spec, -1, true, true, true, -1)?;
@@ -497,11 +604,7 @@ fn cmd_create(
     Ok(())
 }
 
-fn cmd_start(
-    id: &str,
-    state_dir: &str,
-    matches: &getopts::Matches,
-) -> Result<()> {
+fn cmd_start(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     debug!("Performing start");
 
     // we use instance dir for config written out by create
@@ -525,7 +628,7 @@ fn cmd_start(
         }
         Ok(fd) => fd,
     };
-    let mut init = !matches.opt_present("n");
+    let mut init = !matches.is_present("n");
     let init_pid = get_init_pid()?;
     if init_pid != -1 {
         // NOTE: if init was set but we already have an init pid,
@@ -552,17 +655,10 @@ fn cmd_start(
     Ok(())
 }
 
-fn cmd_kill(
-    id: &str,
-    state_dir: &str,
-    matches: &getopts::Matches,
-) -> Result<()> {
+fn cmd_kill(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     debug!("Performing kill");
-    let signal = if matches.free.len() > 2 {
-        signals::to_signal(&matches.free[2])?
-    } else {
-        Signal::SIGTERM
-    };
+    let signal = signals::to_signal(matches.value_of("signal").unwrap())
+        .unwrap_or(Signal::SIGTERM);
     let dir = instance_dir(id, state_dir);
     chdir(&*dir).chain_err(
         || format!("instance {} doesn't exist", id),
@@ -686,12 +782,8 @@ fn cmd_delete(id: &str, state_dir: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_run(id: &str, matches: &getopts::Matches) -> Result<()> {
-    let bundle = if matches.free.len() >= 3 {
-        &matches.free[2]
-    } else {
-        "."
-    };
+fn cmd_run(id: &str, matches: &ArgMatches) -> Result<()> {
+    let bundle = matches.value_of("bundle").unwrap();
     chdir(&*bundle).chain_err(
         || format!("failed to chdir to {}", bundle),
     )?;
@@ -704,9 +796,9 @@ fn cmd_run(id: &str, matches: &getopts::Matches) -> Result<()> {
         &spec.root.path,
         &spec,
         -1,
-        !matches.opt_present("n"),
-        matches.opt_present("o"),
-        matches.opt_present("d"),
+        !matches.is_present("n"),
+        matches.is_present("o"),
+        matches.is_present("d"),
         -1,
     )?;
     info!("Container running with pid {}", child_pid);

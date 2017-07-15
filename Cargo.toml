@@ -6,8 +6,8 @@ build = "build.rs"
 
 [dependencies]
 caps = "0.0.1"
+clap = "2.24.1"
 error-chain = "0.10.0"
-getopts = "0.2.14"
 lazy_static = "0.2.4"
 libc = "0.2.21"
 log = {version = "0.3.6", features = ["release_max_level_info"] }
