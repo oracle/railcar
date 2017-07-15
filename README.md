@@ -16,6 +16,8 @@ Rust](https://blogs.oracle.com/developers/building-a-container-runtime-in-rust)
 
 ## Building `railcar` ##
 
+[![wercker status](https://app.wercker.com/status/730e874772dc02c6005f4ae4e42b0ca4/s/master "wercker status")](https://app.wercker.com/project/byKey/730e874772dc02c6005f4ae4e42b0ca4)
+
 Install rust:
 
     curl https://sh.rustup.rs -sSf | sh
