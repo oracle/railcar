@@ -1,6 +1,6 @@
 [package]
 name = "railcar"
-version = "1.0.2"
+version = "1.0.3"
 authors = ["Vishvananda Ishaya Abrams <vish.ishaya@oracle.com>"]
 build = "build.rs"
 
