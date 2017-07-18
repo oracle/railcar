@@ -1,3 +1,4 @@
+#![allow(unknown_lints)]
 #![recursion_limit = "1024"]
 #![cfg_attr(feature = "nightly", feature(start))]
 #![cfg_attr(feature = "nightly", feature(alloc_system))]
@@ -212,15 +213,34 @@ fn main() {
     ::std::process::exit(0);
 }
 
+#[allow(needless_pass_by_value)]
 fn id_validator(val: String) -> StdResult<(), String> {
     if val.contains("..") || val.contains('/') {
         return Err(format!("id {} may cannot contain '..' or '/'", val));
     }
     Ok(())
 }
+
 fn run() -> Result<()> {
+    let id_arg = Arg::with_name("id")
+        .required(true)
+        .takes_value(true)
+        .validator(id_validator)
+        .help("Unique identifier");
+    let bundle_arg = Arg::with_name("bundle")
+        .default_value(".")
+        .required(true)
+        .long("bundle")
+        .short("b");
+    let pid_arg = Arg::with_name("p")
+        .help("Additional location to write pid")
+        .long("pid-file")
+        .short("p")
+        .takes_value(true);
+
     let matches = App::new("Railcar")
         .about("Railcar - run conatiner from oci runtime spec")
+        .setting(AppSettings::ColoredHelp)
         .author(crate_authors!("\n"))
         .setting(AppSettings::SubcommandRequired)
         .version(crate_version!())
@@ -232,70 +252,56 @@ fn run() -> Result<()> {
         )
         .arg(
             Arg::with_name("d")
-                .help("daemonize the process")
+                .help("Daemonize the process")
                 .long("daemonize")
                 .short("d"),
         )
         .arg(
             Arg::with_name("log")
-                .help("compatibility (ignored)")
+                .help("Compatibility (ignored)")
                 .long("log")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("log-format")
-                .help("compatibility (ignored)")
+                .help("Compatibility (ignored)")
                 .long("log-format")
                 .takes_value(true),
         )
         .arg(
             Arg::with_name("n")
-                .help("do not create an init process")
+                .help("Do not create an init process")
                 .long("no-init")
                 .short("n"),
         )
         .arg(
             Arg::with_name("o")
-                .help("do not exec process (exits on signal)")
+                .help("Do not exec process (exits on signal)")
                 .long("only-init")
                 .short("o"),
         )
         .arg(
             Arg::with_name("r")
                 .default_value("/run/railcar")
-                .help("dir for state")
+                .help("Dir for state")
                 .long("root")
                 .short("r")
                 .takes_value(true),
         )
         .subcommand(
             SubCommand::with_name("run")
-                .arg(
-                    Arg::with_name("bundle")
-                        .default_value(".")
-                        .required(true)
-                        .long("bundle")
-                        .short("b"),
-                )
-                .arg(Arg::with_name("id").required(true).takes_value(true))
-                .arg(
-                    Arg::with_name("p")
-                        .help("additional location to write pid")
-                        .long("pid-file")
-                        .short("p")
-                        .takes_value(true),
-                )
-                .help("run a container"),
+                .setting(AppSettings::ColoredHelp)
+                .arg(&id_arg)
+                .arg(&bundle_arg)
+                .arg(&pid_arg)
+                .about("Run a container"),
         )
         .subcommand(
             SubCommand::with_name("create")
-                .arg(
-                    Arg::with_name("bundle")
-                        .default_value(".")
-                        .required(true)
-                        .long("bundle")
-                        .short("b"),
-                )
+                .setting(AppSettings::ColoredHelp)
+                .arg(&id_arg)
+                .arg(&bundle_arg)
+                .arg(&pid_arg)
                 .arg(
                     Arg::with_name("c")
                         .help("console to use")
@@ -303,44 +309,29 @@ fn run() -> Result<()> {
                         .short("c")
                         .takes_value(true),
                 )
-                .arg(Arg::with_name("id").required(true).takes_value(true))
-                .arg(
-                    Arg::with_name("p")
-                        .help("additional location to write pid")
-                        .long("pid-file")
-                        .short("p")
-                        .takes_value(true),
-                )
-                .help("create a container (to be started later)"),
+                .about("Create a container (to be started later)"),
         )
         .subcommand(
             SubCommand::with_name("start")
-                .arg(Arg::with_name("id").required(true).takes_value(true))
-                .help("start a (previously created) container"),
+                .setting(AppSettings::ColoredHelp)
+                .arg(&id_arg)
+                .about("Start a (previously created) container"),
         )
         .subcommand(
             SubCommand::with_name("state")
-                .arg(
-                    Arg::with_name("id")
-                        .required(true)
-                        .takes_value(true)
-                        .validator(id_validator),
-                )
-                .help(
-                    "get the (json) state of a (previously created) container",
+                .setting(AppSettings::ColoredHelp)
+                .arg(&id_arg)
+                .about(
+                    "Get the (json) state of a (previously created) container",
                 ),
         )
         .subcommand(
             SubCommand::with_name("kill")
-                .arg(
-                    Arg::with_name("id")
-                        .required(true)
-                        .takes_value(true)
-                        .validator(id_validator),
-                )
+                .setting(AppSettings::ColoredHelp)
+                .arg(&id_arg)
                 .arg(
                     Arg::with_name("a")
-                        .help("compatibility (ignored)")
+                        .help("Compatibility (ignored)")
                         .long("all")
                         .short("a")
                         .takes_value(true),
@@ -349,36 +340,29 @@ fn run() -> Result<()> {
                     Arg::with_name("signal")
                         .default_value("TERM")
                         .required(true)
-                        .takes_value(true),
+                        .takes_value(true)
+                        .help("Signal to send to container"),
                 )
-                .help("signal a (previously created) container"),
+                .about("Signal a (previously created) container"),
         )
         .subcommand(
             SubCommand::with_name("delete")
-                .arg(
-                    Arg::with_name("id")
-                        .required(true)
-                        .takes_value(true)
-                        .validator(id_validator),
-                )
-                .help("delete a (previously created) container"),
+                .setting(AppSettings::ColoredHelp)
+                .arg(&id_arg)
+                .about("Delete a (previously created) container"),
         )
         .subcommand(
             SubCommand::with_name("ps")
-                .arg(
-                    Arg::with_name("id")
-                        .required(true)
-                        .takes_value(true)
-                        .validator(id_validator),
-                )
+                .setting(AppSettings::ColoredHelp)
+                .arg(&id_arg)
                 .arg(
                     Arg::with_name("f")
-                        .help("compatibility (ignored)")
+                        .help("Compatibility (ignored)")
                         .long("format")
                         .short("f")
                         .takes_value(true),
                 )
-                .help("list processes in a (previously created) container"),
+                .about("List processes in a (previously created) container"),
         )
         .get_matches_from(get_args());
     let level = match matches.occurrences_of("v") {
