@@ -367,9 +367,7 @@ fn run() -> Result<()> {
         .get_matches_from(get_args());
     let level = match matches.occurrences_of("v") {
         0 => log::LogLevelFilter::Info, //default
-        1 => log::LogLevelFilter::Warn,
-        2 => log::LogLevelFilter::Error,
-        3 => log::LogLevelFilter::Debug,
+        1 => log::LogLevelFilter::Debug,
         _ => log::LogLevelFilter::Trace,
     };
 
