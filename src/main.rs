@@ -228,18 +228,19 @@ fn run() -> Result<()> {
         .validator(id_validator)
         .help("Unique identifier");
     let bundle_arg = Arg::with_name("bundle")
-        .default_value(".")
         .required(true)
+        .default_value(".")
         .long("bundle")
-        .short("b");
+        .short("b")
+        .help("Directory containing config.json");
     let pid_arg = Arg::with_name("p")
-        .help("Additional location to write pid")
+        .takes_value(true)
         .long("pid-file")
         .short("p")
-        .takes_value(true);
+        .help("Additional location to write pid");
 
     let matches = App::new("Railcar")
-        .about("Railcar - run conatiner from oci runtime spec")
+        .about("Railcar - run a container from an oci-runtime spec file")
         .setting(AppSettings::ColoredHelp)
         .author(crate_authors!("\n"))
         .setting(AppSettings::SubcommandRequired)
@@ -304,7 +305,7 @@ fn run() -> Result<()> {
                 .arg(&pid_arg)
                 .arg(
                     Arg::with_name("c")
-                        .help("console to use")
+                        .help("Console to use")
                         .long("console")
                         .short("c")
                         .takes_value(true),
