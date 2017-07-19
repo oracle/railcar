@@ -309,6 +309,12 @@ fn run() -> Result<()> {
                         .short("c")
                         .takes_value(true),
                 )
+                .arg(
+                    Arg::with_name("console-socket")
+                        .help("console socket (unsupported)")
+                        .long("console-socket")
+                        .takes_value(true),
+                )
                 .about("Create a container (to be started later)"),
         )
         .subcommand(
@@ -515,6 +521,10 @@ fn cmd_create(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     chdir(&*dir).chain_err(
         || format!("failed to chdir to {}", &dir),
     )?;
+    let csocket = matches.value_of("console-socket").unwrap_or_default();
+    if csocket != "" {
+        bail!("Console socket unsupported. Try running without -t");
+    }
 
     let console = matches.value_of("c").unwrap_or_default();
     if console != "" {
