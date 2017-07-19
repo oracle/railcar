@@ -124,6 +124,20 @@ pub enum LinuxCapabilityType {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct LinuxCapabilities {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bounding: Vec<LinuxCapabilityType>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effective: Vec<LinuxCapabilityType>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inheritable: Vec<LinuxCapabilityType>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permitted: Vec<LinuxCapabilityType>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ambient: Vec<LinuxCapabilityType>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Process {
     #[serde(default, skip_serializing_if = "is_false")]
     pub terminal: bool,
@@ -136,8 +150,9 @@ pub struct Process {
     pub env: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cwd: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<LinuxCapabilityType>,
+    #[serde(default, deserialize_with = "deserialize_capabilities",
+            skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<LinuxCapabilities>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rlimits: Vec<LinuxRlimit>,
     #[serde(default, skip_serializing_if = "is_false",
@@ -149,6 +164,84 @@ pub struct Process {
     #[serde(default, skip_serializing_if = "String::is_empty",
             rename = "selinuxLabel")]
     pub selinux_label: String,
+}
+
+use serde::Deserialize;
+
+fn cap_from_array<D>(
+    a: &[serde_json::Value],
+) -> Result<Vec<LinuxCapabilityType>, D::Error>
+where
+    D: serde::Deserializer,
+{
+    let mut caps = Vec::new();
+    for c in a {
+        match LinuxCapabilityType::deserialize(c) {
+            Ok(val) => caps.push(val),
+            Err(_) => {
+                let msg = format!("Capability '{}' is not valid", c);
+                return Err(serde::de::Error::custom(msg));
+            }
+        }
+    }
+    Ok(caps)
+}
+
+fn cap_from_object<D>(
+    o: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<Vec<LinuxCapabilityType>, D::Error>
+where
+    D: serde::Deserializer,
+{
+    if let Some(v) = o.get(key) {
+        match *v {
+            serde_json::Value::Null => Ok(Vec::new()),
+            serde_json::Value::Array(ref a) => cap_from_array::<D>(a),
+            _ => Err(serde::de::Error::custom(
+                "Unexpected value in capability set",
+            )),
+        }
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+// handle the old case where caps was just a list of caps
+fn deserialize_capabilities<D>(
+    de: D,
+) -> Result<Option<LinuxCapabilities>, D::Error>
+where
+    D: serde::Deserializer,
+{
+    let r: serde_json::Value = serde::Deserialize::deserialize(de)?;
+    match r {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Array(a) => {
+            let caps = cap_from_array::<D>(&a)?;
+            let capabilities = LinuxCapabilities {
+                bounding: caps.clone(),
+                effective: caps.clone(),
+                inheritable: caps.clone(),
+                permitted: caps.clone(),
+                ambient: caps.clone(),
+            };
+
+            Ok(Some(capabilities))
+        }
+        serde_json::Value::Object(o) => {
+            let capabilities = LinuxCapabilities{
+                bounding: cap_from_object::<D>(&o, "bounding")?,
+                effective: cap_from_object::<D>(&o, "effective")?,
+                inheritable: cap_from_object::<D>(&o, "inheritable")?,
+                permitted: cap_from_object::<D>(&o, "permitted")?,
+                ambient: cap_from_object::<D>(&o, "ambient")?,
+            };
+
+            Ok(Some(capabilities))
+        }
+        _ => Err(serde::de::Error::custom("Unexpected value in capabilites")),
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]

@@ -1074,18 +1074,22 @@ fn run_container(
             bail!(format!("set no_new_privs returned {}", e));
         };
         // drop privileges
-        capabilities::drop_privileges(&spec.process.capabilities)?;
+        if let Some(ref c) = spec.process.capabilities {
+            capabilities::drop_privileges(c)?;
+        }
         if let Some(ref seccomp) = linux.seccomp {
             seccomp::initialize_seccomp(seccomp)?;
         }
     } else {
-        // NOTE: if we have not set no new privilges, we must set up seccomp
+        // NOTE: if we have not set no new priviliges, we must set up seccomp
         //       before capset, which will error if seccomp blocks it
         if let Some(ref seccomp) = linux.seccomp {
             seccomp::initialize_seccomp(seccomp)?;
         }
         // drop privileges
-        capabilities::drop_privileges(&spec.process.capabilities)?;
+        if let Some(ref c) = spec.process.capabilities {
+            capabilities::drop_privileges(c)?;
+        }
     }
 
 
