@@ -560,8 +560,11 @@ pub struct LinuxSeccompArg {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LinuxSyscall {
+    // old version used name
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
     pub action: LinuxSeccompAction,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<LinuxSeccompArg>,
