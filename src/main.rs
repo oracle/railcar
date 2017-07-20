@@ -499,15 +499,6 @@ fn cmd_create(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     chdir(&*bundle).chain_err(
         || format!("failed to chdir to {}", bundle),
     )?;
-    let spec = Spec::load(CONFIG).chain_err(
-        || format!("failed to load {}", CONFIG),
-    )?;
-
-    let rootfs = canonicalize(&spec.root.path)
-        .chain_err(|| format!{"failed to find root path {}", &spec.root.path})?
-        .to_string_lossy()
-        .into_owned();
-
     let dir = instance_dir(id, state_dir);
     debug!("creating state dir {}", &dir);
     if let Err(e) = create_dir(&dir) {
@@ -517,6 +508,23 @@ fn cmd_create(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
         }
         bail!("Container with id {} already exists", id);
     }
+    if let Err(e) = finish_create(id, &dir, matches) {
+        let _ = remove_dir_all(&dir);
+        Err(e)
+    } else {
+        Ok(())
+    }
+}
+
+fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
+    let spec = Spec::load(CONFIG).chain_err(
+        || format!("failed to load {}", CONFIG),
+    )?;
+
+    let rootfs = canonicalize(&spec.root.path)
+        .chain_err(|| format!{"failed to find root path {}", &spec.root.path})?
+        .to_string_lossy()
+        .into_owned();
 
     chdir(&*dir).chain_err(
         || format!("failed to chdir to {}", &dir),
