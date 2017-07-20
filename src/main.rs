@@ -42,6 +42,8 @@ use nix::poll::{poll, PollFd, POLLIN, POLLHUP, POLLNVAL, EventFlags};
 use nix::sched::{setns, unshare, CloneFlags};
 use nix::sched::{CLONE_NEWNS, CLONE_NEWPID, CLONE_NEWUSER, CLONE_NEWUTS};
 use nix::sched::{CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWCGROUP};
+use nix::sys::socket::{ControlMessage, MsgFlags, socket, connect, sendmsg};
+use nix::sys::socket::{SockAddr, UnixAddr, AddressFamily, SockType, SockFlag};
 use nix::sys::signal::{SigSet, Signal};
 use nix::sys::stat::{Mode, fstat};
 use nix::sys::wait::{waitpid, WaitStatus, WNOHANG};
@@ -311,7 +313,7 @@ fn run() -> Result<()> {
                 )
                 .arg(
                     Arg::with_name("console-socket")
-                        .help("console socket (unsupported)")
+                        .help("socket to pass master of console")
                         .long("console-socket")
                         .takes_value(true),
                 )
@@ -529,9 +531,17 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
     chdir(&*dir).chain_err(
         || format!("failed to chdir to {}", &dir),
     )?;
+    // NOTE: There are certain configs where we will not be able to create a
+    //       console during start, so this could potentially create the
+    //       console during init and pass to the process via sendmsg. This
+    //       would also allow us to write debug data from the init process
+    //       to the console and allow us to pass stdoutio from init to the
+    //       process, fixing the lack of stdout collection if -t is not
+    //       specified when using docker run.
     let csocket = matches.value_of("console-socket").unwrap_or_default();
     if csocket != "" {
-        bail!("Console socket unsupported. Try running without -t");
+        let lnk = format!("{}/console-socket", dir);
+        symlink(&csocket, lnk)?;
     }
 
     let console = matches.value_of("c").unwrap_or_default();
@@ -542,7 +552,7 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
     let pidfile = matches.value_of("p").unwrap_or_default();
 
     let child_pid =
-        run_container(id, &rootfs, &spec, -1, true, true, true, -1)?;
+        run_container(id, &rootfs, &spec, -1, true, true, true, -1, -1)?;
     if child_pid != -1 {
         debug!("writing init pid file {}", child_pid);
         let mut f = File::create(INIT_PID)?;
@@ -617,6 +627,20 @@ fn cmd_start(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
         || format!("failed to load {}", CONFIG),
     )?;
 
+    let csocket = format!("{}/console-socket", dir);
+    let mut csocketfd =
+        socket(AddressFamily::Unix, SockType::Stream, SockFlag::empty(), 0)?;
+    csocketfd =
+        match connect(csocketfd, &SockAddr::Unix(UnixAddr::new(&*csocket)?)) {
+            Err(e) => {
+                if e.errno() != Errno::ENOENT {
+                    let msg = format!("failed to open {}", csocket);
+                    return Err(e).chain_err(|| msg)?;
+                }
+                -1
+            }
+            Ok(()) => csocketfd,
+        };
     let console = format!("{}/console", dir);
     let consolefd = match open(&*console, O_NOCTTY | O_RDWR, Mode::empty()) {
         Err(e) => {
@@ -645,6 +669,7 @@ fn cmd_start(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
         init,
         false,
         true,
+        csocketfd,
         consolefd,
     )?;
     if child_pid != -1 {
@@ -800,6 +825,7 @@ fn cmd_run(id: &str, matches: &ArgMatches) -> Result<()> {
         matches.is_present("o"),
         matches.is_present("d"),
         -1,
+        -1,
     )?;
     info!("Container running with pid {}", child_pid);
     Ok(())
@@ -873,7 +899,8 @@ fn run_container(
     mut init: bool,
     mut init_only: bool,
     daemonize: bool,
-    consolefd: RawFd,
+    csocketfd: RawFd,
+    mut consolefd: RawFd,
 ) -> Result<(i32)> {
     if let Err(e) = prctl::set_dumpable(false) {
         bail!(format!("set dumpable returned {}", e));
@@ -1003,35 +1030,6 @@ fn run_container(
         sethostname(&spec.hostname)?;
     }
 
-    // NOTE: if we are running without a supplied console, then
-    //       stdout and stderr will not be properly passed to
-    //       docker since the start command has different stdout
-    //       than the init command. In order to make this work
-    //       we would need init to make a pseudoterminal and copy
-    //       data back and forth, or pass the stdio file discriptors
-    //       over a socket of some sort.
-    if consolefd != -1 {
-        setsid()?;
-        if unsafe { libc::ioctl(consolefd, libc::TIOCSCTTY) } < 0 {
-            warn!("could not TIOCSCTTY");
-        };
-        dup2(consolefd, 0).chain_err(
-            || "could not dup tty to stdin",
-        )?;
-        dup2(consolefd, 1).chain_err(
-            || "could not dup tty to stdout",
-        )?;
-        dup2(consolefd, 2).chain_err(
-            || "could not dup tty to stderr",
-        )?;
-
-    // NOTE: we may need to fix up the mount of /dev/console
-    } else if daemonize && !init_only {
-        close(0).chain_err(|| "could not close stdin")?;
-        close(1).chain_err(|| "could not close stdout")?;
-        close(2).chain_err(|| "could not close stderr")?;
-    }
-
     if cf.contains(CLONE_NEWNS) {
         mounts::init_rootfs(spec, rootfs, &cpath, bind_devices)
             .chain_err(|| "failed to init rootfs")?;
@@ -1065,8 +1063,61 @@ fn run_container(
         // NOTE: apparently criu has problems if pointing to an fd outside
         //       the filesystem namespace.
         reopen_dev_null()?;
+    }
 
+    if csocketfd != -1 {
+        let mut slave: libc::c_int = unsafe { std::mem::uninitialized() };
+        let mut master: libc::c_int = unsafe { std::mem::uninitialized() };
+        let ret = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        Errno::result(ret).chain_err(|| "could not openpty")?;
+        defer!(close(master).unwrap());
+        let data: &[u8] = b"/dev/ptmx";
+        let iov = [nix::sys::uio::IoVec::from_slice(data)];
+        //let fds = [master.as_raw_fd()];
+        let fds = [master];
+        let cmsg = ControlMessage::ScmRights(&fds);
+        warn!("debug sending master fd to socket");
+        sendmsg(csocketfd, &iov, &[cmsg], MsgFlags::empty(), None)?;
+        consolefd = slave;
+    }
+    // NOTE: if we are running without a supplied console, then
+    //       stdout and stderr will not be properly passed to
+    //       docker since the start command has different stdout
+    //       than the init command. In order to make this work
+    //       we would need init to pass the file discriptors from
+    //       init over a socket of some sort.
+    if consolefd != -1 {
+        warn!("setting up slave console");
+        setsid()?;
+        if unsafe { libc::ioctl(consolefd, libc::TIOCSCTTY) } < 0 {
+            warn!("could not TIOCSCTTY");
+        };
+        dup2(consolefd, 0).chain_err(
+            || "could not dup tty to stdin",
+        )?;
+        dup2(consolefd, 1).chain_err(
+            || "could not dup tty to stdout",
+        )?;
+        dup2(consolefd, 2).chain_err(
+            || "could not dup tty to stderr",
+        )?;
 
+    // NOTE: we may need to fix up the mount of /dev/console
+    } else if daemonize && !init_only {
+        close(0).chain_err(|| "could not close stdin")?;
+        close(1).chain_err(|| "could not close stdout")?;
+        close(2).chain_err(|| "could not close stderr")?;
+    }
+
+    if cf.contains(CLONE_NEWNS) {
         mounts::finish_rootfs(spec).chain_err(
             || "failed to finish rootfs",
         )?;
