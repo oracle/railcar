@@ -11,6 +11,7 @@ use oci::{Mount, Spec, LinuxDevice, LinuxDeviceType};
 use selinux::setfilecon;
 use std::collections::HashMap;
 use std::fs::{create_dir_all, canonicalize, remove_file};
+use std::fs::OpenOptions;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
@@ -54,6 +55,15 @@ pub fn init_rootfs(
     let linux = spec.linux.as_ref().unwrap();
     mount(None::<&str>, "/", None::<&str>, flags, None::<&str>)?;
 
+    // mount root dir
+    mount(
+        Some(rootfs),
+        rootfs,
+        None::<&str>,
+        MS_BIND | MS_REC,
+        None::<&str>,
+    )?;
+
     for m in &spec.mounts {
         // TODO: check for nasty destinations involving symlinks and illegal
         //       locations.
@@ -90,15 +100,6 @@ pub fn init_rootfs(
     ensure_ptmx()?;
 
     chdir(&olddir)?;
-
-    // mount root dir
-    mount(
-        Some(rootfs),
-        rootfs,
-        None::<&str>,
-        MS_BIND | MS_REC,
-        None::<&str>,
-    )?;
 
     Ok(())
 }
@@ -296,12 +297,6 @@ fn mount_from(
 
     let dest = format!{"{}{}", rootfs, &m.destination};
 
-    let src = if m.typ == "bind" {
-        canonicalize(&m.source)?
-    } else {
-        PathBuf::from(&m.source)
-    };
-
     debug!(
         "mounting {} to {} as {} with data '{}'",
         &m.source,
@@ -309,13 +304,34 @@ fn mount_from(
         &m.typ,
         &d
     );
-    if let Err(e) = create_dir_all(&dest) {
-        debug!(
-            "ignoring create dir fail for mount {}: {}",
-            &m.destination,
-            e
-        )
-    }
+
+    let src = if m.typ == "bind" {
+        let src = canonicalize(&m.source)?;
+        let dir = if src.is_file() {
+            Path::new(&dest).parent().unwrap()
+        } else {
+            Path::new(&dest)
+        };
+        if let Err(e) = create_dir_all(&dir) {
+            debug!("ignoring create dir fail of {:?}: {}", &dir, e)
+        }
+        // make sure file exists so we can bind over it
+        if src.is_file() {
+            if let Err(e) = OpenOptions::new().create(true).write(true).open(
+                &dest,
+            )
+            {
+                debug!("ignoring touch fail of {:?}: {}", &dest, e)
+            }
+        }
+        src
+    } else {
+        if let Err(e) = create_dir_all(&dest) {
+            debug!("ignoring create dir fail of {:?}: {}", &dest, e)
+        }
+        PathBuf::from(&m.source)
+    };
+
     if let Err(e) = mount(
         Some(&*src),
         &*dest,
@@ -338,15 +354,19 @@ fn mount_from(
     }
     // remount bind mounts if they have other flags (like MS_RDONLY)
     if flags.contains(MS_BIND) &&
-        flags.intersects(!(MS_REC | MS_REMOUNT | MS_BIND))
+        flags.intersects(
+            !(MS_REC | MS_REMOUNT | MS_BIND | MS_PRIVATE | MS_SHARED |
+                  MS_SLAVE),
+        )
     {
+        let chain = || format!("remount of {} failed", &dest);
         mount(
             Some(&*dest),
             &*dest,
             None::<&str>,
             flags | MS_REMOUNT,
             None::<&str>,
-        )?;
+        ).chain_err(chain)?;
     }
     Ok(())
 }
