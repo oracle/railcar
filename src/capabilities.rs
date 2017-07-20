@@ -1,16 +1,17 @@
 use caps::*;
-use oci::LinuxCapabilityType;
+use oci::{LinuxCapabilities, LinuxCapabilityType};
 
 fn to_cap(cap: LinuxCapabilityType) -> Capability {
     unsafe { ::std::mem::transmute(cap) }
 }
 
-const ALL_CAP_SETS: &'static [CapSet] = &[
-    CapSet::Effective,
-    CapSet::Permitted,
-    CapSet::Inheritable,
-    CapSet::Ambient,
-];
+fn to_set(caps: &[LinuxCapabilityType]) -> CapsHashSet {
+    let mut capabilities = CapsHashSet::new();
+    for c in caps {
+        capabilities.insert(to_cap(*c));
+    }
+    capabilities
+}
 
 pub fn reset_effective() -> ::Result<()> {
     let mut all = CapsHashSet::new();
@@ -21,22 +22,20 @@ pub fn reset_effective() -> ::Result<()> {
     Ok(())
 }
 
-pub fn drop_privileges(cs: &[LinuxCapabilityType]) -> ::Result<()> {
+pub fn drop_privileges(cs: &LinuxCapabilities) -> ::Result<()> {
     let mut all = CapsHashSet::new();
     for c in Capability::iter_variants() {
         all.insert(c);
     }
-    let mut capabilities = CapsHashSet::new();
-    for c in cs {
-        capabilities.insert(to_cap(*c));
-    }
+    debug!("dropping bounding capabilities to {:?}", cs.bounding);
     // drop excluded caps from the bounding set
-    for c in all.difference(&capabilities) {
+    for c in all.difference(&to_set(&cs.bounding)) {
         drop(None, CapSet::Bounding, *c)?;
     }
-    // set all sets for current process
-    for capset in ALL_CAP_SETS {
-        set(None, *capset, capabilities.clone())?;
-    }
+    // set other sets for current process
+    set(None, CapSet::Effective, to_set(&cs.effective))?;
+    set(None, CapSet::Permitted, to_set(&cs.permitted))?;
+    set(None, CapSet::Inheritable, to_set(&cs.inheritable))?;
+    set(None, CapSet::Ambient, to_set(&cs.ambient))?;
     Ok(())
 }

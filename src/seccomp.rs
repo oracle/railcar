@@ -97,24 +97,30 @@ pub fn initialize_seccomp(seccomp: &LinuxSeccomp) -> ::Result<()> {
     }
     // add actions for syscalls
     for syscall in &seccomp.syscalls {
-        let id = match syscall_resolve_name(&syscall.name) {
-            Ok(result) => result,
-            Err(e) => {
-                info!("Skipping unknown syscall: {}", e);
-                continue;
-            }
+        let mut names = syscall.names.clone();
+        if names.is_empty() {
+            names.push(syscall.name.clone())
         };
-        let mut cmps = Vec::new();
-        for arg in &syscall.args {
-            cmps.push(scmp_arg_cmp {
-                arg: arg.index as u32,
-                op: to_cmp(arg.op),
-                datum_a: arg.value as scmp_datum_t,
-                datum_b: arg.value_two as scmp_datum_t,
-            });
-        }
+        for name in names {
+            let id = match syscall_resolve_name(&name) {
+                Ok(result) => result,
+                Err(e) => {
+                    info!("Skipping unknown syscall: {}", e);
+                    continue;
+                }
+            };
+            let mut cmps = Vec::new();
+            for arg in &syscall.args {
+                cmps.push(scmp_arg_cmp {
+                    arg: arg.index as u32,
+                    op: to_cmp(arg.op),
+                    datum_a: arg.value as scmp_datum_t,
+                    datum_b: arg.value_two as scmp_datum_t,
+                });
+            }
 
-        rule_add(ctx, syscall.action as u32, id, &cmps)?;
+            rule_add(ctx, syscall.action as u32, id, &cmps)?;
+        }
     }
     load(ctx)?;
     Ok(())

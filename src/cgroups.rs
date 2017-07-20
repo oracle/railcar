@@ -12,6 +12,7 @@ pub fn init() {
     // initialize lazy_static maps
     initialize(&PATHS);
     initialize(&MOUNTS);
+    initialize(&DEFAULT_ALLOWED_DEVICES);
     initialize(&APPLIES);
 }
 
@@ -242,6 +243,59 @@ lazy_static! {
     };
 }
 
+lazy_static! {
+    static ref DEFAULT_ALLOWED_DEVICES: Vec<LinuxDeviceCgroup> = {
+        let mut v = Vec::new();
+        // mknod any device
+        v.push(LinuxDeviceCgroup{
+            allow: true,
+            typ: LinuxDeviceType::c,
+            major: None,
+            minor: None,
+            access: "m".to_string(),
+        });
+        v.push(LinuxDeviceCgroup{
+            allow: true,
+            typ: LinuxDeviceType::b,
+            major: None,
+            minor: None,
+            access: "m".to_string(),
+        });
+        // /dev/console
+        v.push(LinuxDeviceCgroup{
+            allow: true,
+            typ: LinuxDeviceType::c,
+            major: Some(5),
+            minor: Some(1),
+            access: "rwm".to_string(),
+        });
+        // /dev/pts
+        v.push(LinuxDeviceCgroup{
+            allow: true,
+            typ: LinuxDeviceType::c,
+            major: Some(136),
+            minor: None,
+            access: "rwm".to_string(),
+        });
+        v.push(LinuxDeviceCgroup{
+            allow: true,
+            typ: LinuxDeviceType::c,
+            major: Some(5),
+            minor: Some(2),
+            access: "rwm".to_string(),
+        });
+        // tun/tap
+        v.push(LinuxDeviceCgroup{
+            allow: true,
+            typ: LinuxDeviceType::c,
+            major: Some(10),
+            minor: Some(200),
+            access: "rwm".to_string(),
+        });
+        v
+    };
+}
+
 type Apply = fn(&LinuxResources, &str) -> Result<()>;
 
 lazy_static! {
@@ -468,5 +522,9 @@ fn devices_apply(r: &LinuxResources, dir: &str) -> Result<()> {
 
         write_device(&ld, dir)?;
     }
+    for ld in DEFAULT_ALLOWED_DEVICES.iter() {
+        write_device(ld, dir)?;
+    }
+
     Ok(())
 }
