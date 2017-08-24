@@ -358,6 +358,12 @@ fn run() -> Result<()> {
             SubCommand::with_name("delete")
                 .setting(AppSettings::ColoredHelp)
                 .arg(&id_arg)
+                .arg(
+                    Arg::with_name("f")
+                        .help("Compatibility (ignored)")
+                        .long("force")
+                        .short("f"),
+                )
                 .about("Delete a (previously created) container"),
         )
         .subcommand(
