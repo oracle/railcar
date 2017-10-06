@@ -1,10 +1,12 @@
 use cgroups;
 use errors::*;
 use nix::{Errno, NixPath};
+use nix::Error::Sys;
 use nix::fcntl::{open, O_DIRECTORY, O_RDWR, O_RDONLY, O_CREAT};
 use nix::mount::*;
 use nix::sys::stat::{mknod, umask};
 use nix::sys::stat::{Mode, SFlag, S_IFBLK, S_IFCHR, S_IFIFO};
+use nix::unistd::{Gid, Uid};
 use nix::unistd::{close, getcwd, chdir, pivot_root, chown};
 use nix_ext::fchdir;
 use oci::{Mount, Spec, LinuxDevice, LinuxDeviceType};
@@ -340,7 +342,7 @@ fn mount_from(
         Some(&*d),
     )
     {
-        if e.errno() != Errno::EINVAL {
+        if e != Sys(Errno::EINVAL) {
             let chain = || format!("mount of {} failed", &m.destination);
             return Err(e).chain_err(chain)?;
         }
@@ -443,7 +445,7 @@ fn mknod_dev(dev: &LinuxDevice) -> Result<()> {
         Mode::from_bits_truncate(dev.file_mode.unwrap_or(0)),
         makedev(dev.major, dev.minor),
     )?;
-    chown(&dev.path[1..], dev.uid, dev.gid)?;
+    chown(&dev.path[1..], dev.uid.map(|n| Uid::from_raw(n)), dev.gid.map(|n| Gid::from_raw(n)))?;
     Ok(())
 }
 
@@ -479,7 +481,7 @@ fn mask_path(path: &str) -> Result<()> {
     )
     {
         // ignore ENOENT and ENOTDIR: path to mask doesn't exist
-        if e.errno() != Errno::ENOENT && e.errno() != Errno::ENOTDIR {
+        if e != Sys(Errno::ENOENT) && e != Sys(Errno::ENOTDIR) {
             let msg = format!("could not mask {}", path);
             Err(e).chain_err(|| msg)?;
         }
@@ -502,7 +504,7 @@ fn readonly_path(path: &str) -> Result<()> {
     )
     {
         // ignore ENOENT: path to make read only doesn't exist
-        if e.errno() != Errno::ENOENT {
+        if e != Sys(Errno::ENOENT) {
             let msg = format!("could not readonly {}", path);
             Err(e).chain_err(|| msg)?;
         }

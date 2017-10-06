@@ -1,5 +1,6 @@
 use errors::*;
-use nix::c_int;
+use nix::libc::c_int;
+use nix::unistd::Pid;
 use nix::sys::signal::{SigAction, SigHandler, SaFlags, SigSet, Signal};
 use nix::sys::signal::{sigaction, kill, raise};
 
@@ -21,7 +22,7 @@ static mut CHILD_PID: i32 = 0;
 
 extern "C" fn child_handler(signo: c_int) {
     unsafe {
-        let _ = kill(CHILD_PID, Signal::from_c_int(signo).unwrap());
+        let _ = kill(Pid::from_raw(CHILD_PID), Signal::from_c_int(signo).unwrap());
     }
 }
 
@@ -53,7 +54,7 @@ pub fn signal_children(signal: Signal) -> Result<()> {
     let mut s = SigSet::empty();
     s.add(signal);
     s.thread_block()?;
-    kill(0, signal)?;
+    kill(Pid::from_raw(0), signal)?;
     Ok(())
 }
 
@@ -99,7 +100,7 @@ pub fn signal_process<T: Into<Option<Signal>>>(
     pid: i32,
     signal: T,
 ) -> Result<()> {
-    kill(pid, signal)?;
+    kill(Pid::from_raw(pid), signal)?;
     Ok(())
 }
 
