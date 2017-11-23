@@ -625,7 +625,10 @@ pub struct Spec {
     #[serde(default, skip_serializing_if = "String::is_empty",
             rename = "ociVersion")]
     pub version: String,
-    pub platform: Platform,
+    // NOTE: Platform was removed, but keeping it as an option
+    //       to support older docker versions
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<Platform>,
     pub process: Process,
     pub root: Root,
     #[serde(default, skip_serializing_if = "String::is_empty")]
