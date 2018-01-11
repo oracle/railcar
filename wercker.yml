@@ -1,4 +1,4 @@
-box: scorpil/rust:stable
+box: rust:latest
 build:
   steps:
     - install-packages:
