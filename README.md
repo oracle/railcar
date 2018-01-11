@@ -40,7 +40,7 @@ binary, set `TARGET` to `x86_64-unknown-linux-musl`:
 
 Build requirements for TARGET=x86_64-unknown-linux-gnu:
 
-    libseccomp
+    libseccomp-devel
 
 Build requirements for TARGET=x86_64-unknown-linux-musl:
 
