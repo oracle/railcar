@@ -337,8 +337,7 @@ fn run() -> Result<()> {
                     Arg::with_name("a")
                         .help("Compatibility (ignored)")
                         .long("all")
-                        .short("a")
-                        .takes_value(true),
+                        .short("a"),
                 )
                 .arg(
                     Arg::with_name("signal")
