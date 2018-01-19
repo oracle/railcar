@@ -490,10 +490,14 @@ fn state_from_dir(id: &str, state_dir: &str) -> Result<(oci::State)> {
                     status = "stopped";
                 }
             } else {
-                warn!("invalid process pid: {}", result);
+                // not safe to log during state because shim combines
+                // stdout and stderr
+                // warn!("invalid process pid: {}", result);
             }
         } else {
-            warn!("could not open process pid");
+            // not safe to log during state because shim combines
+            // stdout and stderr
+            // warn!("could not open process pid");
         }
     }
     let st = state(id, status, pid, &root);
