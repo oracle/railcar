@@ -197,7 +197,6 @@ fn get_args() -> Vec<String> {
 
 fn main() {
     std::env::set_var("RUST_BACKTRACE", "1");
-    let pid = getpid();
     if let Err(ref e) = run() {
         error!("{}", e);
 
@@ -206,10 +205,6 @@ fn main() {
         }
 
         print_backtrace(e);
-        // if we are the top level thread, kill all children
-        if pid == getpid() {
-            signals::signal_children(Signal::SIGTERM).unwrap();
-        }
         ::std::process::exit(1);
     }
     ::std::process::exit(0);
@@ -558,8 +553,17 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
     }
     let pidfile = matches.value_of("p").unwrap_or_default();
 
-    let child_pid =
-        run_container(id, &rootfs, &spec, -1, true, true, true, -1, -1)?;
+    let child_pid = safe_run_container(
+        id,
+        &rootfs,
+        &spec,
+        -1,
+        true,
+        true,
+        true,
+        -1,
+        -1,
+    )?;
     if child_pid != -1 {
         debug!("writing init pid file {}", child_pid);
         let mut f = File::create(INIT_PID)?;
@@ -668,7 +672,7 @@ fn cmd_start(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     }
 
 
-    let child_pid = run_container(
+    let child_pid = safe_run_container(
         id,
         &spec.root.path,
         &spec,
@@ -823,7 +827,7 @@ fn cmd_run(id: &str, matches: &ArgMatches) -> Result<()> {
         || format!("failed to load {}", CONFIG),
     )?;
 
-    let child_pid = run_container(
+    let child_pid = safe_run_container(
         id,
         &spec.root.path,
         &spec,
@@ -896,6 +900,40 @@ fn execute_hook(hook: &oci::Hook, state: &oci::State) -> Result<()> {
         }
     };
     Ok(())
+}
+
+fn safe_run_container(
+    id: &str,
+    rootfs: &str,
+    spec: &Spec,
+    init_pid: i32,
+    init: bool,
+    init_only: bool,
+    daemonize: bool,
+    csocketfd: RawFd,
+    consolefd: RawFd,
+) -> Result<(i32)> {
+    let pid = getpid();
+    return match run_container(
+        id,
+        rootfs,
+        spec,
+        init_pid,
+        init,
+        init_only,
+        daemonize,
+        csocketfd,
+        consolefd,
+    ) {
+        Err(e) => {
+            // if we are the top level thread, kill all children
+            if pid == getpid() {
+                signals::signal_children(Signal::SIGTERM).unwrap();
+            }
+            Err(e)
+        }
+        Ok(child_pid) => Ok(child_pid),
+    };
 }
 
 fn run_container(
