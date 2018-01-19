@@ -43,6 +43,7 @@ use nix::sched::{setns, unshare, CloneFlags};
 use nix::sched::{CLONE_NEWNS, CLONE_NEWPID, CLONE_NEWUSER, CLONE_NEWUTS};
 use nix::sched::{CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWCGROUP};
 use nix::sys::socket::{ControlMessage, MsgFlags, socket, connect, sendmsg};
+use nix::sys::socket::{bind, listen, accept};
 use nix::sys::socket::{SockAddr, UnixAddr, AddressFamily, SockType, SockFlag};
 use nix::sys::signal::{SigSet, Signal};
 use nix::sys::stat::{Mode, fstat};
@@ -235,6 +236,10 @@ fn run() -> Result<()> {
         .long("pid-file")
         .short("p")
         .help("Additional location to write pid");
+    let init_arg = Arg::with_name("n")
+        .help("Do not create an init process")
+        .long("no-init")
+        .short("n");
 
     let matches = App::new("Railcar")
         .about("Railcar - run a container from an oci-runtime spec file")
@@ -267,18 +272,6 @@ fn run() -> Result<()> {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("n")
-                .help("Do not create an init process")
-                .long("no-init")
-                .short("n"),
-        )
-        .arg(
-            Arg::with_name("o")
-                .help("Do not exec process (exits on signal)")
-                .long("only-init")
-                .short("o"),
-        )
-        .arg(
             Arg::with_name("r")
                 .default_value("/run/railcar")
                 .help("Dir for state")
@@ -292,6 +285,7 @@ fn run() -> Result<()> {
                 .arg(&id_arg)
                 .arg(&bundle_arg)
                 .arg(&pid_arg)
+                .arg(&init_arg)
                 .about("Run a container"),
         )
         .subcommand(
@@ -300,6 +294,18 @@ fn run() -> Result<()> {
                 .arg(&id_arg)
                 .arg(&bundle_arg)
                 .arg(&pid_arg)
+                .arg(&init_arg)
+                // NOTE(vish): if no-trigger is specified, console
+                //             and console-socket will be loaded
+                //             by start instead of create, so
+                //             no output will appear from the init
+                //             process.
+                .arg(
+                    Arg::with_name("t")
+                        .help("Double fork instead of trigger")
+                        .long("no-trigger")
+                        .short("t"),
+                )
                 .arg(
                     Arg::with_name("c")
                         .help("Console to use")
@@ -427,11 +433,7 @@ fn run() -> Result<()> {
             cmd_run(run_matches.value_of("id").unwrap(), run_matches)
         }
         ("start", Some(start_matches)) => {
-            cmd_start(
-                start_matches.value_of("id").unwrap(),
-                &state_dir,
-                start_matches,
-            )
+            cmd_start(start_matches.value_of("id").unwrap(), &state_dir)
         }
         ("state", Some(state_matches)) => {
             cmd_state(state_matches.value_of("id").unwrap(), &state_dir)
@@ -535,6 +537,35 @@ fn cmd_create(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     }
 }
 
+fn load_console_sockets() -> Result<(RawFd, RawFd)> {
+    let csocket = "console-socket";
+    let mut csocketfd =
+        socket(AddressFamily::Unix, SockType::Stream, SockFlag::empty(), 0)?;
+    csocketfd =
+        match connect(csocketfd, &SockAddr::Unix(UnixAddr::new(&*csocket)?)) {
+            Err(e) => {
+                if e.errno() != Errno::ENOENT {
+                    let msg = format!("failed to open {}", csocket);
+                    return Err(e).chain_err(|| msg)?;
+                }
+                -1
+            }
+            Ok(()) => csocketfd,
+        };
+    let console = "console";
+    let consolefd = match open(&*console, O_NOCTTY | O_RDWR, Mode::empty()) {
+        Err(e) => {
+            if e.errno() != Errno::ENOENT {
+                let msg = format!("failed to open {}", console);
+                return Err(e).chain_err(|| msg)?;
+            }
+            -1
+        }
+        Ok(fd) => fd,
+    };
+    return Ok((csocketfd, consolefd));
+}
+
 fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
     let spec = Spec::load(CONFIG).chain_err(
         || format!("failed to load {}", CONFIG),
@@ -548,24 +579,33 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
     chdir(&*dir).chain_err(
         || format!("failed to chdir to {}", &dir),
     )?;
-    // NOTE: There are certain configs where we will not be able to create a
-    //       console during start, so this could potentially create the
-    //       console during init and pass to the process via sendmsg. This
-    //       would also allow us to write debug data from the init process
-    //       to the console and allow us to pass stdoutio from init to the
-    //       process, fixing the lack of stdout collection if -t is not
-    //       specified when using docker run.
-    let csocket = matches.value_of("console-socket").unwrap_or_default();
-    if csocket != "" {
+    // symlink the console-socket
+    let csock = matches.value_of("console-socket").unwrap_or_default();
+    if csock != "" {
         let lnk = format!("{}/console-socket", dir);
-        symlink(&csocket, lnk)?;
+        symlink(&csock, lnk)?;
     }
-
-    let console = matches.value_of("c").unwrap_or_default();
-    if console != "" {
+    // symlink the console
+    let cons = matches.value_of("c").unwrap_or_default();
+    if cons != "" {
         let lnk = format!("{}/console", dir);
-        symlink(&console, lnk)?;
+        symlink(&cons, lnk)?;
     }
+    let (csocketfd, consolefd, tsocketfd) = if !matches.is_present("t") {
+        let tsocket = "trigger-socket";
+        let tsocketfd = socket(
+            AddressFamily::Unix,
+            SockType::Stream,
+            SockFlag::empty(),
+            0,
+        )?;
+        bind(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?))?;
+        let (csocketfd, consolefd) = load_console_sockets()?;
+        (csocketfd, consolefd, tsocketfd)
+    } else {
+        (-1, -1, -1)
+    };
+
     let pidfile = matches.value_of("p").unwrap_or_default();
 
     let child_pid = safe_run_container(
@@ -576,8 +616,9 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
         true,
         true,
         true,
-        -1,
-        -1,
+        csocketfd,
+        consolefd,
+        tsocketfd,
     )?;
     if child_pid != -1 {
         debug!("writing init pid file {}", child_pid);
@@ -640,7 +681,7 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
     Ok(())
 }
 
-fn cmd_start(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
+fn cmd_start(id: &str, state_dir: &str) -> Result<()> {
     debug!("Performing start");
 
     // we use instance dir for config written out by create
@@ -653,50 +694,79 @@ fn cmd_start(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
         || format!("failed to load {}", CONFIG),
     )?;
 
-    let csocket = "console-socket";
-    let mut csocketfd =
+    let init_pid = get_init_pid()?;
+
+    let tsocket = "trigger-socket";
+    let mut tsocketfd =
         socket(AddressFamily::Unix, SockType::Stream, SockFlag::empty(), 0)?;
-    csocketfd =
-        match connect(csocketfd, &SockAddr::Unix(UnixAddr::new(&*csocket)?)) {
+    tsocketfd =
+        match connect(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?)) {
             Err(e) => {
                 if e.errno() != Errno::ENOENT {
-                    let msg = format!("failed to open {}", csocket);
+                    let msg = format!("failed to open {}", tsocket);
                     return Err(e).chain_err(|| msg)?;
                 }
                 -1
             }
-            Ok(()) => csocketfd,
+            Ok(()) => tsocketfd,
         };
-    let console = "console";
-    let consolefd = match open(&*console, O_NOCTTY | O_RDWR, Mode::empty()) {
-        Err(e) => {
-            if e.errno() != Errno::ENOENT {
-                let msg = format!("failed to open {}", console);
-                return Err(e).chain_err(|| msg)?;
+    // if we are triggering just trigger and exit
+    if tsocketfd != -1 {
+        debug!("running prestart hooks");
+        if let Some(ref hooks) = spec.hooks {
+            let st = state(id, "running", init_pid, &spec.root.path);
+            for h in &hooks.prestart {
+                execute_hook(h, &st).chain_err(
+                    || "failed to execute prestart hooks",
+                )?;
             }
-            -1
         }
-        Ok(fd) => fd,
-    };
-    let mut init = !matches.is_present("n");
-    let init_pid = get_init_pid()?;
-    if init_pid != -1 {
-        // NOTE: if init was set but we already have an init pid,
-        //       don't attempt to create another init.
-        init = false;
+        let linux = spec.linux.as_ref().unwrap();
+        let cpath = if linux.cgroups_path == "" {
+            format!{"/{}", id}
+        } else {
+            linux.cgroups_path.clone()
+        };
+        // get the actual pid of the process from cgroup
+        let mut child_pid = -1;
+        let procs = cgroups::get_procs("cpuset", &cpath);
+        for p in procs {
+            if p != init_pid {
+                debug!("actual pid of child is {}", p);
+                child_pid = p;
+                break;
+            }
+        }
+        let mut f = File::create(PROCESS_PID)?;
+        f.write_all(child_pid.to_string().as_bytes())?;
+        debug!("running poststart hooks");
+        if let Some(ref hooks) = spec.hooks {
+            let st = state(id, "running", init_pid, &spec.root.path);
+            for h in &hooks.poststart {
+                if let Err(e) = execute_hook(h, &st) {
+                    warn!("failed to execute poststart hook: {}", e);
+                }
+            }
+        }
+        debug!("writing zero to trigger socket to start exec");
+        let data: &[u8] = &[0];
+        write(tsocketfd, data).chain_err(|| "failed to write zero")?;
+        return Ok(());
     }
 
+    let (csocketfd, consolefd) = load_console_sockets()?;
 
     let child_pid = safe_run_container(
         id,
         &spec.root.path,
         &spec,
         init_pid,
-        init,
+        false,
         false,
         true,
         csocketfd,
         consolefd,
+        -1,
     )?;
     if child_pid != -1 {
         debug!("writing process {} pid file", child_pid);
@@ -868,8 +938,9 @@ fn cmd_run(id: &str, matches: &ArgMatches) -> Result<()> {
         &spec,
         -1,
         !matches.is_present("n"),
-        matches.is_present("o"),
+        false,
         matches.is_present("d"),
+        -1,
         -1,
         -1,
     )?;
@@ -947,9 +1018,10 @@ fn safe_run_container(
     daemonize: bool,
     csocketfd: RawFd,
     consolefd: RawFd,
+    tsocketfd: RawFd,
 ) -> Result<(i32)> {
     let pid = getpid();
-    return match run_container(
+    match run_container(
         id,
         rootfs,
         spec,
@@ -959,6 +1031,7 @@ fn safe_run_container(
         daemonize,
         csocketfd,
         consolefd,
+        tsocketfd,
     ) {
         Err(e) => {
             // if we are the top level thread, kill all children
@@ -968,7 +1041,7 @@ fn safe_run_container(
             Err(e)
         }
         Ok(child_pid) => Ok(child_pid),
-    };
+    }
 }
 
 fn run_container(
@@ -981,6 +1054,7 @@ fn run_container(
     daemonize: bool,
     csocketfd: RawFd,
     mut consolefd: RawFd,
+    tsocketfd: RawFd,
 ) -> Result<(i32)> {
     if let Err(e) = prctl::set_dumpable(false) {
         bail!(format!("set dumpable returned {}", e));
@@ -1122,6 +1196,7 @@ fn run_container(
         write(wfd, data).chain_err(|| "failed to write zero")?;
     }
 
+
     if mount_fd != -1 {
         setns(mount_fd, CLONE_NEWNS).chain_err(|| {
             "failed to enter CLONE_NEWNS".to_string()
@@ -1190,11 +1265,7 @@ fn run_container(
             || "could not dup tty to stderr",
         )?;
 
-    // NOTE: we may need to fix up the mount of /dev/console
-    } else if daemonize && !init_only {
-        close(0).chain_err(|| "could not close stdin")?;
-        close(1).chain_err(|| "could not close stdout")?;
-        close(2).chain_err(|| "could not close stderr")?;
+        // NOTE: we may need to fix up the mount of /dev/console
     }
 
     if cf.contains(CLONE_NEWNS) {
@@ -1241,19 +1312,31 @@ fn run_container(
         }
     }
 
-
-    if init && !init_only {
-        fork_final_child(wfd, daemonize)?;
-    }
     // notify first parent that it can continue
     debug!("writing zero to pipe to trigger poststart");
     let data: &[u8] = &[0];
     write(wfd, data).chain_err(|| "failed to write zero")?;
-    if init_only {
-        do_init(wfd, daemonize)?;
+
+    if init {
+        if init_only && tsocketfd == -1 {
+            do_init(wfd, daemonize)?;
+        } else {
+            fork_final_child(wfd, tsocketfd, daemonize)?;
+        }
     }
+
     // we nolonger need wfd, so close it
     close(wfd).chain_err(|| "could not close wfd")?;
+
+    // wait for trigger
+    if tsocketfd != -1 {
+        listen(tsocketfd, 1)?;
+        let fd = accept(tsocketfd)?;
+        wait_for_pipe_zero(fd, -1)?;
+        close(fd).chain_err(|| "could not close accept fd")?;
+        close(tsocketfd).chain_err(|| "could not close trigger fd")?;
+    }
+
     do_exec(&spec.process.args[0], &spec.process.args, &spec.process.env)?;
     Ok(-1)
 }
@@ -1404,7 +1487,7 @@ fn fork_enter_pid(init: bool, daemonize: bool) -> Result<()> {
     Ok(())
 }
 
-fn fork_final_child(wfd: RawFd, daemonize: bool) -> Result<()> {
+fn fork_final_child(wfd: RawFd, tfd: RawFd, daemonize: bool) -> Result<()> {
     // fork again so child becomes pid 2
     match fork()? {
         ForkResult::Child => {
@@ -1412,6 +1495,9 @@ fn fork_final_child(wfd: RawFd, daemonize: bool) -> Result<()> {
             Ok(())
         }
         ForkResult::Parent { .. } => {
+            if tfd != -1 {
+                close(tfd).chain_err(|| "could not close trigger fd")?;
+            }
             do_init(wfd, daemonize)?;
             Ok(())
         }
