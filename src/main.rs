@@ -385,6 +385,14 @@ fn run() -> Result<()> {
         Box::new(logger::SimpleLogger)
     });
 
+    // create empty log file to avoid warning
+    let lpath = matches.value_of("log").unwrap_or_default();
+    if lpath != "" {
+        std::fs::OpenOptions::new().create(true).write(true).open(
+            lpath,
+        )?;
+    }
+
     let state_dir = matches.value_of("r").unwrap().to_string();
     debug!("ensuring railcar state dir {}", &state_dir);
     let chain = || format!("ensuring railcar state dir {} failed", &state_dir);
