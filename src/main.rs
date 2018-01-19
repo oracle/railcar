@@ -653,7 +653,7 @@ fn cmd_start(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
         || format!("failed to load {}", CONFIG),
     )?;
 
-    let csocket = format!("{}/console-socket", dir);
+    let csocket = "console-socket";
     let mut csocketfd =
         socket(AddressFamily::Unix, SockType::Stream, SockFlag::empty(), 0)?;
     csocketfd =
@@ -667,7 +667,7 @@ fn cmd_start(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
             }
             Ok(()) => csocketfd,
         };
-    let console = format!("{}/console", dir);
+    let console = "console";
     let consolefd = match open(&*console, O_NOCTTY | O_RDWR, Mode::empty()) {
         Err(e) => {
             if e.errno() != Errno::ENOENT {
