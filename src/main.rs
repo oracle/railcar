@@ -354,7 +354,7 @@ fn run() -> Result<()> {
                 .arg(&id_arg)
                 .arg(
                     Arg::with_name("f")
-                        .help("Compatibility (ignored)")
+                        .help("Kill process if still running")
                         .long("force")
                         .short("f"),
                 )
@@ -399,7 +399,11 @@ fn run() -> Result<()> {
             )
         }
         ("delete", Some(delete_matches)) => {
-            cmd_delete(delete_matches.value_of("id").unwrap(), &state_dir)
+            cmd_delete(
+                delete_matches.value_of("id").unwrap(),
+                &state_dir,
+                delete_matches,
+            )
         }
         ("kill", Some(kill_matches)) => {
             cmd_kill(
@@ -736,7 +740,7 @@ fn cmd_ps(id: &str, state_dir: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_delete(id: &str, state_dir: &str) -> Result<()> {
+fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     debug!("Performing delete");
     let dir = instance_dir(id, state_dir);
     if chdir(&*dir).is_err() {
@@ -747,9 +751,29 @@ fn cmd_delete(id: &str, state_dir: &str) -> Result<()> {
     if let Ok(mut f) = File::open(PROCESS_PID) {
         let mut result = String::new();
         f.read_to_string(&mut result)?;
-        if let Ok(process_pid) = result.parse::<i32>() {
-            if signals::signal_process(process_pid, None).is_ok() {
-                bail!("container process {} is still running", process_pid);
+        if let Ok(pid) = result.parse::<i32>() {
+            if signals::signal_process(pid, None).is_ok() {
+                if matches.is_present("f") {
+                    if let Err(e) = signals::signal_process(
+                        pid,
+                        Signal::SIGKILL,
+                    )
+                    {
+                        let chain =
+                            || format!("failed to kill process {} ", pid);
+                        if let Error(ErrorKind::Nix(n), _) = e {
+                            if n.errno() == Errno::ESRCH {
+                                debug!("container process is already dead");
+                            } else {
+                                Err(e).chain_err(chain)?;
+                            }
+                        } else {
+                            Err(e).chain_err(chain)?;
+                        }
+                    }
+                } else {
+                    bail!("container process {} is still running", pid);
+                }
             }
         } else {
             warn!("invalid process pid: {}", result);
