@@ -36,6 +36,8 @@ pub fn drop_privileges(cs: &LinuxCapabilities) -> ::Result<()> {
     set(None, CapSet::Effective, to_set(&cs.effective))?;
     set(None, CapSet::Permitted, to_set(&cs.permitted))?;
     set(None, CapSet::Inheritable, to_set(&cs.inheritable))?;
-    set(None, CapSet::Ambient, to_set(&cs.ambient))?;
+    if let Err(e) = set(None, CapSet::Ambient, to_set(&cs.ambient)) {
+        warn!("failed to set ambient capabilities: {}", e);
+    }
     Ok(())
 }
