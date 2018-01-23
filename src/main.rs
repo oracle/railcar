@@ -564,7 +564,7 @@ fn load_console_sockets() -> Result<(RawFd, RawFd)> {
         }
         Ok(fd) => fd
     };
-    return Ok((csocketfd, consolefd));
+    Ok((csocketfd, consolefd))
 }
 
 fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
