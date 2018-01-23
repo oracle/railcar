@@ -141,6 +141,7 @@ lazy_static! {
 const CONFIG: &'static str = "config.json";
 const INIT_PID: &'static str = "init.pid";
 const PROCESS_PID: &'static str = "process.pid";
+const TSOCKETFD: RawFd = 9;
 
 #[cfg(feature = "nightly")]
 static mut ARGC: isize = 0 as isize;
@@ -561,7 +562,7 @@ fn load_console_sockets() -> Result<(RawFd, RawFd)> {
             }
             -1
         }
-        Ok(fd) => fd,
+        Ok(fd) => fd
     };
     return Ok((csocketfd, consolefd));
 }
@@ -593,12 +594,18 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
     }
     let (csocketfd, consolefd, tsocketfd) = if !matches.is_present("t") {
         let tsocket = "trigger-socket";
-        let tsocketfd = socket(
+        let tmpfd = socket(
             AddressFamily::Unix,
             SockType::Stream,
             SockFlag::empty(),
             0,
         )?;
+        // NOTE(vish): we might overwrite fds 0, 1, 2 with the console
+        //             so make sure tsocketfd is a high fd that won't
+        //             get overwritten
+        dup2(tmpfd, TSOCKETFD).chain_err(|| "could not dup tsocketfd")?;
+        close(tmpfd).chain_err(|| "could not close tsocket tmpfd")?;
+        let tsocketfd = TSOCKETFD;
         bind(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?))?;
         let (csocketfd, consolefd) = load_console_sockets()?;
         (csocketfd, consolefd, tsocketfd)
@@ -1242,13 +1249,8 @@ fn run_container(
         warn!("debug sending master fd to socket");
         sendmsg(csocketfd, &iov, &[cmsg], MsgFlags::empty(), None)?;
         consolefd = slave;
+        close(csocketfd).chain_err(|| "could not close csocketfd")?;
     }
-    // NOTE: if we are running without a supplied console, then
-    //       stdout and stderr will not be properly passed to
-    //       docker since the start command has different stdout
-    //       than the init command. In order to make this work
-    //       we would need init to pass the file discriptors from
-    //       init over a socket of some sort.
     if consolefd != -1 {
         warn!("setting up slave console");
         setsid()?;
@@ -1266,6 +1268,7 @@ fn run_container(
         )?;
 
         // NOTE: we may need to fix up the mount of /dev/console
+        close(consolefd).chain_err(|| "could not close consolefd")?;
     }
 
     if cf.contains(CLONE_NEWNS) {
