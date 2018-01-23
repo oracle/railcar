@@ -1246,13 +1246,11 @@ fn run_container(
         //let fds = [master.as_raw_fd()];
         let fds = [master];
         let cmsg = ControlMessage::ScmRights(&fds);
-        warn!("debug sending master fd to socket");
         sendmsg(csocketfd, &iov, &[cmsg], MsgFlags::empty(), None)?;
         consolefd = slave;
         close(csocketfd).chain_err(|| "could not close csocketfd")?;
     }
     if consolefd != -1 {
-        warn!("setting up slave console");
         setsid()?;
         if unsafe { libc::ioctl(consolefd, libc::TIOCSCTTY) } < 0 {
             warn!("could not TIOCSCTTY");
@@ -1267,8 +1265,11 @@ fn run_container(
             || "could not dup tty to stderr",
         )?;
 
+        if consolefd > 2 {
+            close(consolefd).chain_err(|| "could not close consolefd")?;
+        }
+
         // NOTE: we may need to fix up the mount of /dev/console
-        close(consolefd).chain_err(|| "could not close consolefd")?;
     }
 
     if cf.contains(CLONE_NEWNS) {
