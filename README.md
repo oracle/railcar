@@ -111,6 +111,12 @@ details.
 Oracle gratefully acknowledges the contributions to railcar that have been made
 by the community.
 
+## Getting in touch ##
+
+The best way to get in touch is Slack.
+
+Join the [Railcar channel](https://oraclecontainertools.slack.com/messages/C8BP6MEA0) in the [Oracle Container Tools workspace](https://oraclecontainertools.slack.com).
+
 ## License ##
 
 Copyright (c) 2017, Oracle and/or its affiliates. All rights reserved.
