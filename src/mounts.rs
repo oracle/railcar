@@ -445,7 +445,11 @@ fn mknod_dev(dev: &LinuxDevice) -> Result<()> {
         Mode::from_bits_truncate(dev.file_mode.unwrap_or(0)),
         makedev(dev.major, dev.minor),
     )?;
-    chown(&dev.path[1..], dev.uid.map(|n| Uid::from_raw(n)), dev.gid.map(|n| Gid::from_raw(n)))?;
+    chown(
+        &dev.path[1..],
+        dev.uid.map(|n| Uid::from_raw(n)),
+        dev.gid.map(|n| Gid::from_raw(n)),
+    )?;
     Ok(())
 }
 

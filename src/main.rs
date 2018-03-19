@@ -564,7 +564,7 @@ fn load_console_sockets() -> Result<(RawFd, RawFd)> {
             }
             -1
         }
-        Ok(fd) => fd
+        Ok(fd) => fd,
     };
     Ok((csocketfd, consolefd))
 }
@@ -605,7 +605,9 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
         // NOTE(vish): we might overwrite fds 0, 1, 2 with the console
         //             so make sure tsocketfd is a high fd that won't
         //             get overwritten
-        dup2(tmpfd, TSOCKETFD).chain_err(|| "could not dup tsocketfd")?;
+        dup2(tmpfd, TSOCKETFD).chain_err(
+            || "could not dup tsocketfd",
+        )?;
         close(tmpfd).chain_err(|| "could not close tsocket tmpfd")?;
         let tsocketfd = TSOCKETFD;
         bind(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?))?;

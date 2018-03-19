@@ -22,7 +22,8 @@ static mut CHILD_PID: i32 = 0;
 
 extern "C" fn child_handler(signo: c_int) {
     unsafe {
-        let _ = kill(Pid::from_raw(CHILD_PID), Signal::from_c_int(signo).unwrap());
+        let _ =
+            kill(Pid::from_raw(CHILD_PID), Signal::from_c_int(signo).unwrap());
     }
 }
 
