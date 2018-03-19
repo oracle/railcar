@@ -547,7 +547,7 @@ fn load_console_sockets() -> Result<(RawFd, RawFd)> {
     csocketfd =
         match connect(csocketfd, &SockAddr::Unix(UnixAddr::new(&*csocket)?)) {
             Err(e) => {
-                if e.errno() != Errno::ENOENT {
+                if e != Sys(Errno::ENOENT) {
                     let msg = format!("failed to open {}", csocket);
                     return Err(e).chain_err(|| msg)?;
                 }
@@ -558,7 +558,7 @@ fn load_console_sockets() -> Result<(RawFd, RawFd)> {
     let console = "console";
     let consolefd = match open(&*console, O_NOCTTY | O_RDWR, Mode::empty()) {
         Err(e) => {
-            if e.errno() != Errno::ENOENT {
+            if e != Sys(Errno::ENOENT) {
                 let msg = format!("failed to open {}", console);
                 return Err(e).chain_err(|| msg)?;
             }
@@ -854,7 +854,7 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
                         let chain =
                             || format!("failed to kill process {} ", pid);
                         if let Error(ErrorKind::Nix(n), _) = e {
-                            if n.errno() == Errno::ESRCH {
+                            if n == Sys(Errno::ESRCH) {
                                 debug!("container process is already dead");
                             } else {
                                 Err(e).chain_err(chain)?;
