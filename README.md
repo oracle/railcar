@@ -40,7 +40,7 @@ binary, set `TARGET` to `x86_64-unknown-linux-musl`:
 
 Build requirements for TARGET=x86_64-unknown-linux-gnu:
 
-    libseccomp
+    libseccomp-devel
 
 Build requirements for TARGET=x86_64-unknown-linux-musl:
 
@@ -110,6 +110,14 @@ details.
 
 Oracle gratefully acknowledges the contributions to railcar that have been made
 by the community.
+
+## Getting in touch ##
+
+The best way to get in touch is Slack.
+
+Click [here](https://join.slack.com/t/oraclecontainertools/shared_invite/enQtMzIwNzg3NDIzMzE5LTIwMjZlODllMWRmNjMwZGM1NGNjMThlZjg3ZmU3NDY1ZWU5ZGJmZWFkOTBjNzk0ODIxNzQ2ODUyNThiNmE0MmI) to join the the [Oracle Container Tools workspace](https://oraclecontainertools.slack.com).
+
+Then join the [Railcar channel](https://oraclecontainertools.slack.com/messages/C8BP6MEA0).
 
 ## License ##
 
