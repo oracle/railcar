@@ -38,7 +38,7 @@ use clap::{Arg, ArgMatches, App, AppSettings, SubCommand};
 use errors::*;
 use lazy_static::initialize;
 use nix::fcntl::{open, OFlag, O_RDWR, O_RDONLY, O_WRONLY, O_CLOEXEC, O_NOCTTY};
-use nix::poll::{poll, PollFd, POLLIN, POLLHUP, POLLNVAL, EventFlags};
+use nix::poll::{poll, PollFd, POLLIN, POLLHUP, POLLNVAL};
 use nix::sched::{setns, unshare, CloneFlags};
 use nix::sched::{CLONE_NEWNS, CLONE_NEWPID, CLONE_NEWUSER, CLONE_NEWUTS};
 use nix::sched::{CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWCGROUP};
@@ -50,7 +50,9 @@ use nix::sys::stat::{Mode, fstat};
 use nix::sys::wait::{waitpid, WaitStatus, WNOHANG};
 use nix::unistd::{close, fork, ForkResult, pipe2, read, write, dup2, setsid};
 use nix::unistd::{setresuid, setresgid, chdir, sethostname, execvp, getpid};
+use nix::unistd::{Gid, Pid, Uid};
 use nix::Errno;
+use nix::Error::Sys;
 use nix_ext::{setgroups, setrlimit, clearenv, putenv};
 use oci::{Spec, Linux, LinuxIDMapping, LinuxRlimit};
 use oci::{LinuxDevice, LinuxDeviceType};
@@ -545,7 +547,7 @@ fn load_console_sockets() -> Result<(RawFd, RawFd)> {
     csocketfd =
         match connect(csocketfd, &SockAddr::Unix(UnixAddr::new(&*csocket)?)) {
             Err(e) => {
-                if e.errno() != Errno::ENOENT {
+                if e != Sys(Errno::ENOENT) {
                     let msg = format!("failed to open {}", csocket);
                     return Err(e).chain_err(|| msg)?;
                 }
@@ -556,13 +558,13 @@ fn load_console_sockets() -> Result<(RawFd, RawFd)> {
     let console = "console";
     let consolefd = match open(&*console, O_NOCTTY | O_RDWR, Mode::empty()) {
         Err(e) => {
-            if e.errno() != Errno::ENOENT {
+            if e != Sys(Errno::ENOENT) {
                 let msg = format!("failed to open {}", console);
                 return Err(e).chain_err(|| msg)?;
             }
             -1
         }
-        Ok(fd) => fd
+        Ok(fd) => fd,
     };
     Ok((csocketfd, consolefd))
 }
@@ -603,7 +605,9 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
         // NOTE(vish): we might overwrite fds 0, 1, 2 with the console
         //             so make sure tsocketfd is a high fd that won't
         //             get overwritten
-        dup2(tmpfd, TSOCKETFD).chain_err(|| "could not dup tsocketfd")?;
+        dup2(tmpfd, TSOCKETFD).chain_err(
+            || "could not dup tsocketfd",
+        )?;
         close(tmpfd).chain_err(|| "could not close tsocket tmpfd")?;
         let tsocketfd = TSOCKETFD;
         bind(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?))?;
@@ -709,7 +713,7 @@ fn cmd_start(id: &str, state_dir: &str) -> Result<()> {
     tsocketfd =
         match connect(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?)) {
             Err(e) => {
-                if e.errno() != Errno::ENOENT {
+                if e != Sys(Errno::ENOENT) {
                     let msg = format!("failed to open {}", tsocket);
                     return Err(e).chain_err(|| msg)?;
                 }
@@ -717,6 +721,7 @@ fn cmd_start(id: &str, state_dir: &str) -> Result<()> {
             }
             Ok(()) => tsocketfd,
         };
+
     // if we are triggering just trigger and exit
     if tsocketfd != -1 {
         debug!("running prestart hooks");
@@ -851,7 +856,7 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
                         let chain =
                             || format!("failed to kill process {} ", pid);
                         if let Error(ErrorKind::Nix(n), _) = e {
-                            if n.errno() == Errno::ESRCH {
+                            if n == Sys(Errno::ESRCH) {
                                 debug!("container process is already dead");
                             } else {
                                 Err(e).chain_err(chain)?;
@@ -878,7 +883,7 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
             if let Err(e) = signals::signal_process(ipid, Signal::SIGKILL) {
                 let chain = || format!("failed to kill init {} ", ipid);
                 if let Error(ErrorKind::Nix(n), _) = e {
-                    if n.errno() == Errno::ESRCH {
+                    if n == Sys(Errno::ESRCH) {
                         debug!("init process is already dead");
                     } else {
                         Err(e).chain_err(chain)?;
@@ -1453,7 +1458,7 @@ fn fork_first(
             }
             signals::pass_signals(pid)?;
             let sig = wait_for_pipe_sig(rfd, -1)?;
-            let (exit_code, _) = wait_for_child(pid)?;
+            let (exit_code, _) = wait_for_child(Pid::from_raw(pid))?;
             cgroups::remove(cpath)?;
             exit(exit_code, sig)?;
         }
@@ -1585,7 +1590,7 @@ fn set_sysctl(key: &str, value: &str) -> Result<()> {
     let path = format!{"/proc/sys/{}", key.replace(".", "/")};
     let fd = match open(&*path, O_RDWR, Mode::empty()) {
         Err(e) => {
-            if e.errno() != Errno::ENOENT {
+            if e != Sys(Errno::ENOENT) {
                 let msg = format!("could not set sysctl {} to {}", key, value);
                 Err(e).chain_err(|| msg)?;
             }
@@ -1628,11 +1633,10 @@ fn wait_for_pipe_vec(
 ) -> Result<(Vec<u8>)> {
     let mut result = Vec::new();
     while result.len() < num {
-        let pfds =
-            &mut [PollFd::new(rfd, POLLIN | POLLHUP, EventFlags::empty())];
+        let pfds = &mut [PollFd::new(rfd, POLLIN | POLLHUP)];
         match poll(pfds, timeout) {
             Err(e) => {
-                if e.errno() != Errno::EINTR {
+                if e != Sys(Errno::EINTR) {
                     return Err(e).chain_err(|| "unable to poll rfd")?;
                 }
                 continue;
@@ -1692,13 +1696,13 @@ fn wait_for_pipe_zero(rfd: RawFd, timeout: i32) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_child(child: i32) -> Result<(i8, Option<Signal>)> {
+fn wait_for_child(child: Pid) -> Result<(i8, Option<Signal>)> {
     loop {
         // wait on all children, but only return if we match child.
-        let result = match waitpid(-1, None) {
+        let result = match waitpid(Some(Pid::from_raw(-1)), None) {
             Err(e) => {
                 // ignore EINTR as it gets sent when we get a SIGCHLD
-                if e.errno() == Errno::EINTR {
+                if e == Sys(Errno::EINTR) {
                     continue;
                 }
                 let msg = format!("could not waitpid on {}", child);
@@ -1708,14 +1712,14 @@ fn wait_for_child(child: i32) -> Result<(i8, Option<Signal>)> {
         };
         match result {
             WaitStatus::Exited(pid, code) => {
-                if child != -1 && pid != child {
+                if child != Pid::from_raw(-1) && pid != child {
                     continue;
                 }
                 reap_children()?;
                 return Ok((code, None));
             }
             WaitStatus::Signaled(pid, signal, _) => {
-                if child != -1 && pid != child {
+                if child != Pid::from_raw(-1) && pid != child {
                     continue;
                 }
                 reap_children()?;
@@ -1745,11 +1749,11 @@ fn exit(exit_code: i8, sig: Option<Signal>) -> Result<()> {
 }
 
 fn reap_children() -> Result<(WaitStatus)> {
-    let mut result = WaitStatus::Exited(0, 0);
+    let mut result = WaitStatus::Exited(Pid::from_raw(0), 0);
     loop {
-        match waitpid(-1, Some(WNOHANG)) {
+        match waitpid(Some(Pid::from_raw(-1)), Some(WNOHANG)) {
             Err(e) => {
-                if e.errno() != Errno::ECHILD {
+                if e != Sys(Errno::ECHILD) {
                     return Err(e).chain_err(|| "could not waitpid")?;
                 }
                 // ECHILD means no processes are left
@@ -1771,8 +1775,14 @@ fn setid(uid: u32, gid: u32) -> Result<()> {
     if let Err(e) = prctl::set_keep_capabilities(true) {
         bail!(format!("set keep capabilities returned {}", e));
     };
-    setresgid(gid, gid, gid)?;
-    setresuid(uid, uid, uid)?;
+    {
+        let gid = Gid::from_raw(gid);
+        setresgid(gid, gid, gid)?;
+    }
+    {
+        let uid = Uid::from_raw(uid);
+        setresuid(uid, uid, uid)?;
+    }
     // if we change from zero, we lose effective caps
     if uid != 0 {
         capabilities::reset_effective()?;

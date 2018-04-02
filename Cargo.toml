@@ -11,7 +11,7 @@ error-chain = "0.10.0"
 lazy_static = "0.2.4"
 libc = "0.2.21"
 log = {version = "0.3.6", features = ["release_max_level_info"] }
-nix = "0.8.0"
+nix = "0.9.0"
 num-traits = "0.1.36"
 oci = { path = "oci" }
 prctl = "1.0.0"
