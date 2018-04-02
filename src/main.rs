@@ -1633,7 +1633,7 @@ fn wait_for_pipe_vec(
 ) -> Result<(Vec<u8>)> {
     let mut result = Vec::new();
     while result.len() < num {
-        let mut pfds = &mut [PollFd::new(rfd, POLLIN | POLLHUP)];
+        let pfds = &mut [PollFd::new(rfd, POLLIN | POLLHUP)];
         match poll(pfds, timeout) {
             Err(e) => {
                 if e != Sys(Errno::EINTR) {
