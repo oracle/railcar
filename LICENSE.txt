@@ -1,6 +1,6 @@
 Copyright (c) 2017, Oracle and/or its affiliates.  All rights reserved.
 
-This software is dual-licensed to you under the Universal Permissive License (UPL) and Apache License 2.0.  See below for license terms.  You may choose either license, or both.
+This software is dual-licensed to you under the Universal Permissive License (UPL) or the Apache License 2.0 or both.  See below for license terms.
  ____________________________
 The Universal Permissive License (UPL), Version 1.0
 Copyright (c) 2017, Oracle and/or its affiliates.  All rights reserved.
