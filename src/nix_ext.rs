@@ -1,8 +1,9 @@
 // Functions in libc that haven't made it into nix yet
 use libc;
-use nix::{Errno, Result};
-use std::os::unix::io::RawFd;
+use nix::errno::Errno;
+use nix::Result;
 use std::ffi::CString;
+use std::os::unix::io::RawFd;
 
 #[inline]
 pub fn lsetxattr(
@@ -60,9 +61,13 @@ pub fn clearenv() -> Result<()> {
 #[inline]
 pub fn putenv(string: &CString) -> Result<()> {
     // NOTE: gnue takes ownership of the string so we pass it
-    //       with into_raw. The docs say this could cause a memory
-    //       leak, but we can't claw it back because our execed
-    //       program may use the environment.
+    //       with into_raw.
+    //       This prevents the string to be de-allocated.
+    //       According to
+    //       https://www.gnu.org/software/libc/manual/html_node/Environment-Access.html
+    //       the variable will be accessable from the exec'd program
+    //       throughout its lifetime, as such this is not going to be re-claimed
+    //       and will show up as leak in valgrind and friends.
     let ptr = string.clone().into_raw();
     let res = unsafe { libc::putenv(ptr as *mut libc::c_char) };
     Errno::result(res).map(drop)

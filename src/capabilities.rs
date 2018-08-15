@@ -14,19 +14,12 @@ fn to_set(caps: &[LinuxCapabilityType]) -> CapsHashSet {
 }
 
 pub fn reset_effective() -> ::Result<()> {
-    let mut all = CapsHashSet::new();
-    for c in Capability::iter_variants() {
-        all.insert(c);
-    }
-    set(None, CapSet::Effective, all)?;
+    set(None, CapSet::Effective, ::caps::all())?;
     Ok(())
 }
 
 pub fn drop_privileges(cs: &LinuxCapabilities) -> ::Result<()> {
-    let mut all = CapsHashSet::new();
-    for c in Capability::iter_variants() {
-        all.insert(c);
-    }
+    let all = ::caps::all();
     debug!("dropping bounding capabilities to {:?}", cs.bounding);
     // drop excluded caps from the bounding set
     for c in all.difference(&to_set(&cs.bounding)) {

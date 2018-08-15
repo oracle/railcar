@@ -6,7 +6,7 @@ error_chain! {
         Nix(::nix::Error);
         Io(::std::io::Error);
         Ffi(::std::ffi::NulError);
-        Caps(::caps::Error);
+        Caps(::caps::errors::Error);
     }
     errors {
         InvalidSpec(t: String) {

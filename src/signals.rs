@@ -1,12 +1,12 @@
 use errors::*;
-use nix::libc::c_int;
+use libc::c_int;
+use nix::sys::signal::{kill, raise, sigaction};
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal};
 use nix::unistd::Pid;
-use nix::sys::signal::{SigAction, SigHandler, SaFlags, SigSet, Signal};
-use nix::sys::signal::{sigaction, kill, raise};
 
-pub fn pass_signals(child_pid: i32) -> Result<()> {
+pub fn pass_signals(child_pid: Pid) -> Result<()> {
     unsafe {
-        CHILD_PID = child_pid;
+        CHILD_PID = Some(child_pid);
         set_handler(SigHandler::Handler(child_handler))?;
     }
     Ok(())
@@ -17,36 +17,25 @@ pub fn pass_signals(child_pid: i32) -> Result<()> {
 // The child pid is only set once prior to setting up the
 // signal handler, so it should be safe to access it from the
 // signal handler.
-static mut CHILD_PID: i32 = 0;
-
+static mut CHILD_PID: Option<Pid> = None;
 
 extern "C" fn child_handler(signo: c_int) {
     unsafe {
-        let _ =
-            kill(Pid::from_raw(CHILD_PID), Signal::from_c_int(signo).unwrap());
+        let _ = kill(
+            CHILD_PID.unwrap_or(Pid::from_raw(0)),
+            Signal::from_c_int(signo).unwrap(),
+        );
     }
 }
 
 unsafe fn set_handler(handler: SigHandler) -> Result<()> {
     let a = SigAction::new(handler, SaFlags::empty(), SigSet::all());
-    sigaction(Signal::SIGTERM, &a).chain_err(
-        || "failed to sigaction",
-    )?;
-    sigaction(Signal::SIGQUIT, &a).chain_err(
-        || "failed to sigaction",
-    )?;
-    sigaction(Signal::SIGINT, &a).chain_err(
-        || "failed to sigaction",
-    )?;
-    sigaction(Signal::SIGHUP, &a).chain_err(
-        || "failed to sigaction",
-    )?;
-    sigaction(Signal::SIGUSR1, &a).chain_err(
-        || "failed to sigaction",
-    )?;
-    sigaction(Signal::SIGUSR2, &a).chain_err(
-        || "failed to sigaction",
-    )?;
+    sigaction(Signal::SIGTERM, &a).chain_err(|| "failed to sigaction")?;
+    sigaction(Signal::SIGQUIT, &a).chain_err(|| "failed to sigaction")?;
+    sigaction(Signal::SIGINT, &a).chain_err(|| "failed to sigaction")?;
+    sigaction(Signal::SIGHUP, &a).chain_err(|| "failed to sigaction")?;
+    sigaction(Signal::SIGUSR1, &a).chain_err(|| "failed to sigaction")?;
+    sigaction(Signal::SIGUSR2, &a).chain_err(|| "failed to sigaction")?;
     Ok(())
 }
 
@@ -96,12 +85,11 @@ pub fn to_signal(signal: &str) -> Result<Signal> {
     })
 }
 
-
 pub fn signal_process<T: Into<Option<Signal>>>(
-    pid: i32,
+    pid: Pid,
     signal: T,
 ) -> Result<()> {
-    kill(Pid::from_raw(pid), signal)?;
+    kill(pid, signal)?;
     Ok(())
 }
 
@@ -119,9 +107,7 @@ pub fn raise_for_parent(signal: Signal) -> Result<()> {
     s.add(signal);
     s.thread_unblock().chain_err(|| "failed to unblock signal")?;
     // raise the signal
-    raise(signal).chain_err(|| {
-        format!("failed to raise signal {:?}", signal)
-    })?;
+    raise(signal).chain_err(|| format!("failed to raise signal {:?}", signal))?;
     Ok(())
 }
 
