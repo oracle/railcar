@@ -387,7 +387,7 @@ fn run() -> Result<()> {
         _ => ::log::LevelFilter::Trace,
     };
 
-    let _ = ::log::set_logger(&logger::SimpleLogger)
+    let _ = ::log::set_logger(&logger::SIMPLE_LOGGER)
         .map(|()| log::set_max_level(level));
 
     // create empty log file to avoid warning
