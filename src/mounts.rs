@@ -532,7 +532,7 @@ fn readonly_path(path: &str) -> Result<()> {
                 }
                 debug!("ignoring remount of {} because it doesn't exist", path);
             }
-            x => {
+            _ => {
                 return Ok(());
             }
         }

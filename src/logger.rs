@@ -4,8 +4,7 @@ use std::io::{stderr, Write};
 
 pub struct SimpleLogger;
 
-
-pub static SIMPLE_LOGGER : SimpleLogger = SimpleLogger;
+pub static SIMPLE_LOGGER: SimpleLogger = SimpleLogger;
 
 impl Log for SimpleLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {

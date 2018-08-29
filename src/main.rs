@@ -840,9 +840,29 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
         let mut result = String::new();
         f.read_to_string(&mut result)?;
         if let Ok(process_pid) = result.parse::<i32>() {
-            if signals::signal_process(Pid::from_raw(process_pid), None).is_ok()
-            {
-                bail!("container process {} is still running", process_pid);
+            let process_pid = Pid::from_raw(process_pid);
+
+            if signals::signal_process(process_pid, None).is_ok() {
+                if matches.is_present("f") {
+                    if let Err(e) =
+                        signals::signal_process(process_pid, Signal::SIGKILL)
+                    {
+                        let chain = || {
+                            format!("failed to kill process {} ", process_pid)
+                        };
+                        if let Error(ErrorKind::Nix(nixerr), _) = e {
+                            if nixerr == ::nix::Error::Sys(Errno::ESRCH) {
+                                debug!("container process is already dead");
+                            } else {
+                                Err(e).chain_err(chain)?;
+                            }
+                        } else {
+                            Err(e).chain_err(chain)?;
+                        }
+                    }
+                } else {
+                    bail!("container process {} is still running", process_pid)
+                }
             }
         } else {
             warn!("invalid process pid: {}", result);
@@ -1577,7 +1597,8 @@ fn wait_for_pipe_vec(
 ) -> Result<(Vec<u8>)> {
     let mut result = Vec::new();
     while result.len() < num {
-        let pfds = &mut [PollFd::new(rfd, EventFlags::POLLIN | EventFlags::POLLHUP)];
+        let pfds =
+            &mut [PollFd::new(rfd, EventFlags::POLLIN | EventFlags::POLLHUP)];
         match poll(pfds, timeout) {
             Err(::nix::Error::Sys(errno)) => {
                 if errno != Errno::EINTR {
