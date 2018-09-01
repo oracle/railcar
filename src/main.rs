@@ -382,12 +382,12 @@ fn run() -> Result<()> {
         )
         .get_matches_from(get_args());
     let level = match matches.occurrences_of("v") {
-        0 => ::log::LevelFilter::Info, //default
-        1 => ::log::LevelFilter::Debug,
-        _ => ::log::LevelFilter::Trace,
+        0 => log::LevelFilter::Info, //default
+        1 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
     };
 
-    let _ = ::log::set_logger(&logger::SIMPLE_LOGGER)
+    let _ = log::set_logger(&logger::SIMPLE_LOGGER)
         .map(|()| log::set_max_level(level));
 
     // create empty log file to avoid warning
