@@ -482,30 +482,21 @@ fn mask_path(path: &str) -> Result<()> {
         return Err(ErrorKind::InvalidSpec(msg).into());
     }
 
-    let _ = mount(
+    if let Err(::nix::Error::Sys(errno)) = mount(
         Some("/dev/null"),
         path,
         None::<&str>,
         MsFlags::MS_BIND,
         None::<&str>,
-    ).map_err(|e| {
-        match e {
-            ::nix::Error::Sys(errno) => {
-                // ignore ENOENT and ENOTDIR: path to mask doesn't exist
-                if errno != Errno::ENOENT && errno != Errno::ENOTDIR {
-                    let _ = format!("could not mask {}", path);
-                    e
-                } else {
-                    debug!(
-                        "ignoring mask of {} because it doesn't exist",
-                        path
-                    );
-                    e
-                }
-            }
-            _ => e,
+    ) {
+        // ignore ENOENT and ENOTDIR: path to mask doesn't exist
+        if errno != Errno::ENOENT && errno != Errno::ENOTDIR {
+            let msg = format!("could not mask {}", path);
+            Err(::nix::Error::Sys(errno)).chain_err(|| msg)?;
+        } else {
+            debug!("ignoring mask of {} because it doesn't exist", path);
         }
-    })?;
+    }
     Ok(())
 }
 
@@ -529,9 +520,10 @@ fn readonly_path(path: &str) -> Result<()> {
                     Err(e).chain_err(|| msg)?;
                 }
                 debug!("ignoring remount of {} because it doesn't exist", path);
+                return Ok(());
             }
             _ => {
-                return Ok(());
+                unreachable!("Supposedly unreachable error {:?}", e);
             }
         }
     }

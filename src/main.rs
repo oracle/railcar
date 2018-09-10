@@ -707,14 +707,13 @@ fn cmd_start(id: &str, state_dir: &str) -> Result<()> {
     )?;
     tsocketfd =
         match connect(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?)) {
-            Err(::nix::Error::Sys(errno)) => {
-                if errno != Errno::ENOENT {
+            Err(e) => {
+                if e != ::nix::Error::Sys(Errno::ENOENT) {
                     let msg = format!("failed to open {}", tsocket);
-                    return Err(::nix::Error::Sys(errno)).chain_err(|| msg)?;
+                    return Err(e).chain_err(|| msg)?;
                 }
                 -1
             }
-            Err(e) => Err(e)?,
             Ok(()) => tsocketfd,
         };
 
@@ -1600,14 +1599,12 @@ fn wait_for_pipe_vec(
         let pfds =
             &mut [PollFd::new(rfd, EventFlags::POLLIN | EventFlags::POLLHUP)];
         match poll(pfds, timeout) {
-            Err(::nix::Error::Sys(errno)) => {
-                if errno != Errno::EINTR {
-                    return Err(::nix::Error::Sys(errno))
-                        .chain_err(|| "unable to poll rfd")?;
+            Err(e) => {
+                if e != ::nix::Error::Sys(Errno::EINTR) {
+                    return Err(e).chain_err(|| "unable to poll rfd")?;
                 }
                 continue;
             }
-            Err(e) => Err(e)?,
             Ok(n) => {
                 if n == 0 {
                     return Err(ErrorKind::Timeout(timeout).into());
@@ -1725,16 +1722,12 @@ fn reap_children() -> Result<(WaitStatus)> {
     let mut result = WaitStatus::Exited(Pid::from_raw(0), 0);
     loop {
         match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
-            Err(::nix::Error::Sys(errno)) => {
-                if errno != Errno::ECHILD {
-                    return Err(::nix::Error::Sys(errno))
-                        .chain_err(|| "could not waitpid")?;
+            Err(e) => {
+                if e != ::nix::Error::Sys(Errno::ECHILD) {
+                    return Err(e).chain_err(|| "could not waitpid")?;
                 }
                 // ECHILD means no processes are left
                 break;
-            }
-            Err(e) => {
-                return Err(e)?;
             }
             Ok(s) => {
                 result = s;
