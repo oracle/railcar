@@ -1,7 +1,7 @@
-use nix::fcntl::O_CLOEXEC;
-use nix::unistd::{pipe2, read, close};
-use std::os::unix::io::RawFd;
 use super::Result;
+use nix::fcntl::OFlag;
+use nix::unistd::{close, pipe2, read};
+use std::os::unix::io::RawFd;
 
 pub struct Cond {
     rfd: RawFd,
@@ -10,7 +10,7 @@ pub struct Cond {
 
 impl Cond {
     pub fn new() -> Result<Cond> {
-        let (rfd, wfd) = pipe2(O_CLOEXEC)?;
+        let (rfd, wfd) = pipe2(OFlag::O_CLOEXEC)?;
         Ok(Cond { rfd: rfd, wfd: wfd })
     }
 

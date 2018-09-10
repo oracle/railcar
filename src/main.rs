@@ -20,55 +20,53 @@ extern crate num_traits;
 extern crate prctl;
 #[macro_use]
 extern crate scopeguard;
-extern crate seccomp_sys;
 extern crate oci;
+extern crate seccomp_sys;
 
 mod capabilities;
 mod cgroups;
 mod errors;
 mod logger;
-mod sync;
 mod mounts;
+mod nix_ext;
 mod seccomp;
 mod selinux;
 mod signals;
-mod nix_ext;
+mod sync;
 
-use clap::{Arg, ArgMatches, App, AppSettings, SubCommand};
+use clap::{App, AppSettings, Arg, ArgMatches, SubCommand};
 use errors::*;
 use lazy_static::initialize;
-use nix::fcntl::{open, OFlag, O_RDWR, O_RDONLY, O_WRONLY, O_CLOEXEC, O_NOCTTY};
-use nix::poll::{poll, PollFd, POLLIN, POLLHUP, POLLNVAL};
+use nix::errno::Errno;
+use nix::fcntl::{open, OFlag};
+use nix::poll::{poll, EventFlags, PollFd};
 use nix::sched::{setns, unshare, CloneFlags};
-use nix::sched::{CLONE_NEWNS, CLONE_NEWPID, CLONE_NEWUSER, CLONE_NEWUTS};
-use nix::sched::{CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWCGROUP};
-use nix::sys::socket::{ControlMessage, MsgFlags, socket, connect, sendmsg};
-use nix::sys::socket::{bind, listen, accept};
-use nix::sys::socket::{SockAddr, UnixAddr, AddressFamily, SockType, SockFlag};
 use nix::sys::signal::{SigSet, Signal};
-use nix::sys::stat::{Mode, fstat};
-use nix::sys::wait::{waitpid, WaitStatus, WNOHANG};
-use nix::unistd::{close, fork, ForkResult, pipe2, read, write, dup2, setsid};
-use nix::unistd::{setresuid, setresgid, chdir, sethostname, execvp, getpid};
+use nix::sys::socket::{accept, bind, connect, listen, sendmsg, socket};
+use nix::sys::socket::{AddressFamily, SockAddr, SockFlag, SockType, UnixAddr};
+use nix::sys::socket::{ControlMessage, MsgFlags};
+use nix::sys::stat::{fstat, Mode};
+use nix::sys::wait::WaitPidFlag;
+use nix::sys::wait::{waitpid, WaitStatus};
+use nix::unistd::{chdir, execvp, getpid, sethostname, setresgid, setresuid};
+use nix::unistd::{close, dup2, fork, pipe2, read, setsid, write, ForkResult};
 use nix::unistd::{Gid, Pid, Uid};
-use nix::Errno;
-use nix::Error::Sys;
-use nix_ext::{setgroups, setrlimit, clearenv, putenv};
-use oci::{Spec, Linux, LinuxIDMapping, LinuxRlimit};
+use nix_ext::{clearenv, putenv, setgroups, setrlimit};
+use oci::{Linux, LinuxIDMapping, LinuxRlimit, Spec};
 use oci::{LinuxDevice, LinuxDeviceType};
 use std::collections::HashMap;
 use std::ffi::CString;
-use std::fs::{File, create_dir, create_dir_all, remove_dir_all, canonicalize};
+use std::fs::{canonicalize, create_dir, create_dir_all, remove_dir_all, File};
 use std::io::{Read, Write};
 use std::os::unix::fs::symlink;
-use std::os::unix::io::{RawFd, FromRawFd};
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::result::Result as StdResult;
 use sync::Cond;
 
 lazy_static! {
     static ref DEFAULT_DEVICES: Vec<LinuxDevice> = {
         let mut v = Vec::new();
-        v.push(LinuxDevice{
+        v.push(LinuxDevice {
             path: "/dev/null".to_string(),
             typ: LinuxDeviceType::c,
             major: 1,
@@ -77,7 +75,7 @@ lazy_static! {
             uid: None,
             gid: None,
         });
-        v.push(LinuxDevice{
+        v.push(LinuxDevice {
             path: "/dev/zero".to_string(),
             typ: LinuxDeviceType::c,
             major: 1,
@@ -86,7 +84,7 @@ lazy_static! {
             uid: None,
             gid: None,
         });
-        v.push(LinuxDevice{
+        v.push(LinuxDevice {
             path: "/dev/full".to_string(),
             typ: LinuxDeviceType::c,
             major: 1,
@@ -95,7 +93,7 @@ lazy_static! {
             uid: None,
             gid: None,
         });
-        v.push(LinuxDevice{
+        v.push(LinuxDevice {
             path: "/dev/tty".to_string(),
             typ: LinuxDeviceType::c,
             major: 5,
@@ -104,7 +102,7 @@ lazy_static! {
             uid: None,
             gid: None,
         });
-        v.push(LinuxDevice{
+        v.push(LinuxDevice {
             path: "/dev/urandom".to_string(),
             typ: LinuxDeviceType::c,
             major: 1,
@@ -113,7 +111,7 @@ lazy_static! {
             uid: None,
             gid: None,
         });
-        v.push(LinuxDevice{
+        v.push(LinuxDevice {
             path: "/dev/random".to_string(),
             typ: LinuxDeviceType::c,
             major: 1,
@@ -129,13 +127,13 @@ lazy_static! {
 lazy_static! {
     static ref NAMESPACES: HashMap<CloneFlags, &'static str> = {
         let mut result = HashMap::new();
-        result.insert(CLONE_NEWIPC, "ipc");
-        result.insert(CLONE_NEWUTS, "uts");
-        result.insert(CLONE_NEWNET, "net");
-        result.insert(CLONE_NEWPID, "pid");
-        result.insert(CLONE_NEWNS, "mnt");
-        result.insert(CLONE_NEWCGROUP, "cgroup");
-        result.insert(CLONE_NEWUSER, "user");
+        result.insert(CloneFlags::CLONE_NEWIPC, "ipc");
+        result.insert(CloneFlags::CLONE_NEWUTS, "uts");
+        result.insert(CloneFlags::CLONE_NEWNET, "net");
+        result.insert(CloneFlags::CLONE_NEWPID, "pid");
+        result.insert(CloneFlags::CLONE_NEWNS, "mnt");
+        result.insert(CloneFlags::CLONE_NEWCGROUP, "cgroup");
+        result.insert(CloneFlags::CLONE_NEWUSER, "user");
         result
     };
 }
@@ -384,22 +382,21 @@ fn run() -> Result<()> {
         )
         .get_matches_from(get_args());
     let level = match matches.occurrences_of("v") {
-        0 => log::LogLevelFilter::Info, //default
-        1 => log::LogLevelFilter::Debug,
-        _ => log::LogLevelFilter::Trace,
+        0 => log::LevelFilter::Info, //default
+        1 => log::LevelFilter::Debug,
+        _ => log::LevelFilter::Trace,
     };
 
-    let _ = log::set_logger(|max_log_level| {
-        max_log_level.set(level);
-        Box::new(logger::SimpleLogger)
-    });
+    let _ = log::set_logger(&logger::SIMPLE_LOGGER)
+        .map(|()| log::set_max_level(level));
 
     // create empty log file to avoid warning
     let lpath = matches.value_of("log").unwrap_or_default();
     if lpath != "" {
-        std::fs::OpenOptions::new().create(true).write(true).open(
-            lpath,
-        )?;
+        std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(lpath)?;
     }
 
     let state_dir = matches.value_of("r").unwrap().to_string();
@@ -408,27 +405,21 @@ fn run() -> Result<()> {
     create_dir_all(&state_dir).chain_err(chain)?;
 
     match matches.subcommand() {
-        ("create", Some(create_matches)) => {
-            cmd_create(
-                create_matches.value_of("id").unwrap(),
-                &state_dir,
-                create_matches,
-            )
-        }
-        ("delete", Some(delete_matches)) => {
-            cmd_delete(
-                delete_matches.value_of("id").unwrap(),
-                &state_dir,
-                delete_matches,
-            )
-        }
-        ("kill", Some(kill_matches)) => {
-            cmd_kill(
-                kill_matches.value_of("id").unwrap(),
-                &state_dir,
-                kill_matches,
-            )
-        }
+        ("create", Some(create_matches)) => cmd_create(
+            create_matches.value_of("id").unwrap(),
+            &state_dir,
+            create_matches,
+        ),
+        ("delete", Some(delete_matches)) => cmd_delete(
+            delete_matches.value_of("id").unwrap(),
+            &state_dir,
+            delete_matches,
+        ),
+        ("kill", Some(kill_matches)) => cmd_kill(
+            kill_matches.value_of("id").unwrap(),
+            &state_dir,
+            kill_matches,
+        ),
         ("ps", Some(ps_matches)) => {
             cmd_ps(ps_matches.value_of("id").unwrap(), &state_dir)
         }
@@ -451,25 +442,25 @@ fn instance_dir(id: &str, state_dir: &str) -> String {
     format!("{}/{}", state_dir, id)
 }
 
-fn state(id: &str, status: &str, pid: i32, bundle: &str) -> oci::State {
+fn state(id: &str, status: &str, pid: Pid, bundle: &str) -> oci::State {
     oci::State {
         version: "0.2.0".to_string(),
         id: id.to_string(),
         status: status.to_string(),
-        pid: pid,
+        pid: pid.into(), // TODO implement serde ser/de for Pid/Gid/..
         bundle: bundle.to_string(),
         annotations: HashMap::new(),
     }
 }
 
 // must be in instance_dir
-fn get_init_pid() -> Result<(i32)> {
-    let mut pid = -1;
+fn get_init_pid() -> Result<(Pid)> {
+    let mut pid = Pid::from_raw(-1);
     if let Ok(mut f) = File::open(INIT_PID) {
         let mut result = String::new();
         f.read_to_string(&mut result)?;
         if let Ok(process_pid) = result.parse::<i32>() {
-            pid = process_pid;
+            pid = Pid::from_raw(process_pid);
         }
     }
     Ok(pid)
@@ -477,9 +468,7 @@ fn get_init_pid() -> Result<(i32)> {
 
 fn state_from_dir(id: &str, state_dir: &str) -> Result<(oci::State)> {
     let dir = instance_dir(id, state_dir);
-    chdir(&*dir).chain_err(
-        || format!("instance {} doesn't exist", id),
-    )?;
+    chdir(&*dir).chain_err(|| format!("instance {} doesn't exist", id))?;
     let mut status = "creating";
     let mut root = String::new();
     let pid = get_init_pid()?;
@@ -491,7 +480,9 @@ fn state_from_dir(id: &str, state_dir: &str) -> Result<(oci::State)> {
             let mut result = String::new();
             f.read_to_string(&mut result)?;
             if let Ok(process_pid) = result.parse::<i32>() {
-                if signals::signal_process(process_pid, None).is_err() {
+                if signals::signal_process(Pid::from_raw(process_pid), None)
+                    .is_err()
+                {
                     status = "stopped";
                 }
             } else {
@@ -509,7 +500,6 @@ fn state_from_dir(id: &str, state_dir: &str) -> Result<(oci::State)> {
     Ok(st)
 }
 
-
 fn cmd_state(id: &str, state_dir: &str) -> Result<()> {
     debug!("Performing state");
     let st = state_from_dir(id, state_dir)?;
@@ -520,9 +510,7 @@ fn cmd_state(id: &str, state_dir: &str) -> Result<()> {
 fn cmd_create(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     debug!("Performing create");
     let bundle = matches.value_of("bundle").unwrap();
-    chdir(&*bundle).chain_err(
-        || format!("failed to chdir to {}", bundle),
-    )?;
+    chdir(&*bundle).chain_err(|| format!("failed to chdir to {}", bundle))?;
     let dir = instance_dir(id, state_dir);
     debug!("creating state dir {}", &dir);
     if let Err(e) = create_dir(&dir) {
@@ -542,12 +530,16 @@ fn cmd_create(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
 
 fn load_console_sockets() -> Result<(RawFd, RawFd)> {
     let csocket = "console-socket";
-    let mut csocketfd =
-        socket(AddressFamily::Unix, SockType::Stream, SockFlag::empty(), 0)?;
+    let mut csocketfd = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
     csocketfd =
         match connect(csocketfd, &SockAddr::Unix(UnixAddr::new(&*csocket)?)) {
             Err(e) => {
-                if e != Sys(Errno::ENOENT) {
+                if e != ::nix::Error::Sys(Errno::ENOENT) {
                     let msg = format!("failed to open {}", csocket);
                     return Err(e).chain_err(|| msg)?;
                 }
@@ -556,37 +548,41 @@ fn load_console_sockets() -> Result<(RawFd, RawFd)> {
             Ok(()) => csocketfd,
         };
     let console = "console";
-    let consolefd = match open(&*console, O_NOCTTY | O_RDWR, Mode::empty()) {
-        Err(e) => {
-            if e != Sys(Errno::ENOENT) {
-                let msg = format!("failed to open {}", console);
-                return Err(e).chain_err(|| msg)?;
+    let consolefd =
+        match open(&*console, OFlag::O_NOCTTY | OFlag::O_RDWR, Mode::empty()) {
+            Err(e) => {
+                if e != ::nix::Error::Sys(Errno::ENOENT) {
+                    let msg = format!("failed to open {}", console);
+                    return Err(e).chain_err(|| msg)?;
+                }
+                -1
             }
-            -1
-        }
-        Ok(fd) => fd,
-    };
+            Ok(fd) => fd,
+        };
     Ok((csocketfd, consolefd))
 }
 
 fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
-    let spec = Spec::load(CONFIG).chain_err(
-        || format!("failed to load {}", CONFIG),
-    )?;
+    let spec =
+        Spec::load(CONFIG).chain_err(|| format!("failed to load {}", CONFIG))?;
 
     let rootfs = canonicalize(&spec.root.path)
         .chain_err(|| format!{"failed to find root path {}", &spec.root.path})?
         .to_string_lossy()
         .into_owned();
 
-    chdir(&*dir).chain_err(
-        || format!("failed to chdir to {}", &dir),
-    )?;
-    // symlink the console-socket
-    let csock = matches.value_of("console-socket").unwrap_or_default();
-    if csock != "" {
+    chdir(&*dir).chain_err(|| format!("failed to chdir to {}", &dir))?;
+    // NOTE: There are certain configs where we will not be able to create a
+    //       console during start, so this could potentially create the
+    //       console during init and pass to the process via sendmsg. This
+    //       would also allow us to write debug data from the init process
+    //       to the console and allow us to pass stdoutio from init to the
+    //       process, fixing the lack of stdout collection if -t is not
+    //       specified when using docker run.
+    let csocket = matches.value_of("console-socket").unwrap_or_default();
+    if csocket != "" {
         let lnk = format!("{}/console-socket", dir);
-        symlink(&csock, lnk)?;
+        symlink(&csocket, lnk)?;
     }
     // symlink the console
     let cons = matches.value_of("c").unwrap_or_default();
@@ -600,14 +596,12 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
             AddressFamily::Unix,
             SockType::Stream,
             SockFlag::empty(),
-            0,
+            None,
         )?;
         // NOTE(vish): we might overwrite fds 0, 1, 2 with the console
         //             so make sure tsocketfd is a high fd that won't
         //             get overwritten
-        dup2(tmpfd, TSOCKETFD).chain_err(
-            || "could not dup tsocketfd",
-        )?;
+        dup2(tmpfd, TSOCKETFD).chain_err(|| "could not dup tsocketfd")?;
         close(tmpfd).chain_err(|| "could not close tsocket tmpfd")?;
         let tsocketfd = TSOCKETFD;
         bind(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?))?;
@@ -623,7 +617,7 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
         id,
         &rootfs,
         &spec,
-        -1,
+        Pid::from_raw(-1),
         true,
         true,
         true,
@@ -631,7 +625,7 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
         consolefd,
         tsocketfd,
     )?;
-    if child_pid != -1 {
+    if child_pid != Pid::from_raw(-1) {
         debug!("writing init pid file {}", child_pid);
         let mut f = File::create(INIT_PID)?;
         f.write_all(child_pid.to_string().as_bytes())?;
@@ -677,7 +671,7 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
                 readonly: spec.root.readonly,
             },
             hostname: "".to_string(), // hostname not needed
-            mounts: Vec::new(), // remove mounts
+            mounts: Vec::new(),       // remove mounts
             hooks: spec.hooks,
             annotations: spec.annotations,
             linux: Some(updated_linux),
@@ -685,9 +679,9 @@ fn finish_create(id: &str, dir: &str, matches: &ArgMatches) -> Result<()> {
             windows: spec.windows,
         };
         debug!("writing updated config");
-        updated.save(CONFIG).chain_err(
-            || format!("failed to save {}", CONFIG),
-        )?;
+        updated
+            .save(CONFIG)
+            .chain_err(|| format!("failed to save {}", CONFIG))?;
     }
     Ok(())
 }
@@ -697,23 +691,24 @@ fn cmd_start(id: &str, state_dir: &str) -> Result<()> {
 
     // we use instance dir for config written out by create
     let dir = instance_dir(id, state_dir);
-    chdir(&*dir).chain_err(
-        || format!("instance {} doesn't exist", id),
-    )?;
+    chdir(&*dir).chain_err(|| format!("instance {} doesn't exist", id))?;
 
-    let spec = Spec::load(CONFIG).chain_err(
-        || format!("failed to load {}", CONFIG),
-    )?;
+    let spec =
+        Spec::load(CONFIG).chain_err(|| format!("failed to load {}", CONFIG))?;
 
     let init_pid = get_init_pid()?;
 
     let tsocket = "trigger-socket";
-    let mut tsocketfd =
-        socket(AddressFamily::Unix, SockType::Stream, SockFlag::empty(), 0)?;
+    let mut tsocketfd = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )?;
     tsocketfd =
         match connect(tsocketfd, &SockAddr::Unix(UnixAddr::new(&*tsocket)?)) {
             Err(e) => {
-                if e != Sys(Errno::ENOENT) {
+                if e != ::nix::Error::Sys(Errno::ENOENT) {
                     let msg = format!("failed to open {}", tsocket);
                     return Err(e).chain_err(|| msg)?;
                 }
@@ -728,9 +723,8 @@ fn cmd_start(id: &str, state_dir: &str) -> Result<()> {
         if let Some(ref hooks) = spec.hooks {
             let st = state(id, "running", init_pid, &spec.root.path);
             for h in &hooks.prestart {
-                execute_hook(h, &st).chain_err(
-                    || "failed to execute prestart hooks",
-                )?;
+                execute_hook(h, &st)
+                    .chain_err(|| "failed to execute prestart hooks")?;
             }
         }
         let linux = spec.linux.as_ref().unwrap();
@@ -740,7 +734,7 @@ fn cmd_start(id: &str, state_dir: &str) -> Result<()> {
             linux.cgroups_path.clone()
         };
         // get the actual pid of the process from cgroup
-        let mut child_pid = -1;
+        let mut child_pid = Pid::from_raw(-1);
         let procs = cgroups::get_procs("cpuset", &cpath);
         for p in procs {
             if p != init_pid {
@@ -780,7 +774,7 @@ fn cmd_start(id: &str, state_dir: &str) -> Result<()> {
         consolefd,
         -1,
     )?;
-    if child_pid != -1 {
+    if child_pid != Pid::from_raw(-1) {
         debug!("writing process {} pid file", child_pid);
         let mut f = File::create(PROCESS_PID)?;
         f.write_all(child_pid.to_string().as_bytes())?;
@@ -793,14 +787,12 @@ fn cmd_kill(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     let signal = signals::to_signal(matches.value_of("signal").unwrap())
         .unwrap_or(Signal::SIGTERM);
     let dir = instance_dir(id, state_dir);
-    chdir(&*dir).chain_err(
-        || format!("instance {} doesn't exist", id),
-    )?;
+    chdir(&*dir).chain_err(|| format!("instance {} doesn't exist", id))?;
     let mut f = File::open(INIT_PID).chain_err(|| "failed to find pid")?;
     let mut result = String::new();
     f.read_to_string(&mut result)?;
     if let Ok(init_pid) = result.parse::<i32>() {
-        if signals::signal_process(init_pid, signal).is_err() {
+        if signals::signal_process(Pid::from_raw(init_pid), signal).is_err() {
             warn!("failed signal init process {}, may have exited", init_pid);
         }
     } else {
@@ -812,24 +804,25 @@ fn cmd_kill(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
 fn cmd_ps(id: &str, state_dir: &str) -> Result<()> {
     debug!("Performing ps");
     let dir = instance_dir(id, state_dir);
-    chdir(&*dir).chain_err(
-        || format!("instance {} doesn't exist", id),
-    )?;
+    chdir(&*dir).chain_err(|| format!("instance {} doesn't exist", id))?;
     let mut f = File::open(PROCESS_PID).chain_err(|| "failed to find pid")?;
     let mut result = String::new();
     f.read_to_string(&mut result)?;
     // TODO: return any other execed processes
     let mut pids = Vec::new();
     if let Ok(process_pid) = result.parse::<i32>() {
-        pids.push(process_pid);
+        pids.push(Pid::from_raw(process_pid));
     } else {
         warn!("invalid process pid: {}", result);
     }
+    let pids = pids
+        .into_iter()
+        .map(|pid: Pid| -> i32 { pid.into() })
+        .collect::<Vec<i32>>();
     println!(
         "{}",
-        oci::serialize::to_string(&pids).chain_err(
-            || "could not serialize pids",
-        )?
+        oci::serialize::to_string(&pids)
+            .chain_err(|| "could not serialize pids")?
     );
     Ok(())
 }
@@ -845,18 +838,19 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
     if let Ok(mut f) = File::open(PROCESS_PID) {
         let mut result = String::new();
         f.read_to_string(&mut result)?;
-        if let Ok(pid) = result.parse::<i32>() {
-            if signals::signal_process(pid, None).is_ok() {
+        if let Ok(process_pid) = result.parse::<i32>() {
+            let process_pid = Pid::from_raw(process_pid);
+
+            if signals::signal_process(process_pid, None).is_ok() {
                 if matches.is_present("f") {
-                    if let Err(e) = signals::signal_process(
-                        pid,
-                        Signal::SIGKILL,
-                    )
+                    if let Err(e) =
+                        signals::signal_process(process_pid, Signal::SIGKILL)
                     {
-                        let chain =
-                            || format!("failed to kill process {} ", pid);
-                        if let Error(ErrorKind::Nix(n), _) = e {
-                            if n == Sys(Errno::ESRCH) {
+                        let chain = || {
+                            format!("failed to kill process {} ", process_pid)
+                        };
+                        if let Error(ErrorKind::Nix(nixerr), _) = e {
+                            if nixerr == ::nix::Error::Sys(Errno::ESRCH) {
                                 debug!("container process is already dead");
                             } else {
                                 Err(e).chain_err(chain)?;
@@ -866,7 +860,7 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
                         }
                     }
                 } else {
-                    bail!("container process {} is still running", pid);
+                    bail!("container process {} is still running", process_pid)
                 }
             }
         } else {
@@ -880,11 +874,16 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
         let mut result = String::new();
         f.read_to_string(&mut result)?;
         if let Ok(ipid) = result.parse::<i32>() {
-            if let Err(e) = signals::signal_process(ipid, Signal::SIGKILL) {
+            if let Err(e) =
+                signals::signal_process(Pid::from_raw(ipid), Signal::SIGKILL)
+            {
                 let chain = || format!("failed to kill init {} ", ipid);
-                if let Error(ErrorKind::Nix(n), _) = e {
-                    if n == Sys(Errno::ESRCH) {
-                        debug!("init process is already dead");
+                if let Error(ErrorKind::Nix(nixerr), _) = e {
+                    if let ::nix::Error::Sys(errno) = nixerr {
+                        if errno == Errno::ESRCH {
+                            debug!("init process is already dead");
+                        }
+                        Err(e).chain_err(chain)?;
                     } else {
                         Err(e).chain_err(chain)?;
                     }
@@ -915,9 +914,8 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
         if let Some(ref hooks) = spec.hooks {
             let st = state_from_dir(id, state_dir)?;
             for h in &hooks.poststop {
-                execute_hook(h, &st).chain_err(
-                    || "failed to execute poststop hooks",
-                )?;
+                execute_hook(h, &st)
+                    .chain_err(|| "failed to execute poststop hooks")?;
             }
         }
     } else {
@@ -937,18 +935,15 @@ fn cmd_delete(id: &str, state_dir: &str, matches: &ArgMatches) -> Result<()> {
 
 fn cmd_run(id: &str, matches: &ArgMatches) -> Result<()> {
     let bundle = matches.value_of("bundle").unwrap();
-    chdir(&*bundle).chain_err(
-        || format!("failed to chdir to {}", bundle),
-    )?;
-    let spec = Spec::load(CONFIG).chain_err(
-        || format!("failed to load {}", CONFIG),
-    )?;
+    chdir(&*bundle).chain_err(|| format!("failed to chdir to {}", bundle))?;
+    let spec =
+        Spec::load(CONFIG).chain_err(|| format!("failed to load {}", CONFIG))?;
 
     let child_pid = safe_run_container(
         id,
         &spec.root.path,
         &spec,
-        -1,
+        Pid::from_raw(-1),
         !matches.is_present("n"),
         false,
         matches.is_present("d"),
@@ -962,7 +957,8 @@ fn cmd_run(id: &str, matches: &ArgMatches) -> Result<()> {
 
 fn execute_hook(hook: &oci::Hook, state: &oci::State) -> Result<()> {
     debug!("executing hook {:?}", hook);
-    let (rfd, wfd) = pipe2(O_CLOEXEC).chain_err(|| "failed to create pipe")?;
+    let (rfd, wfd) =
+        pipe2(OFlag::O_CLOEXEC).chain_err(|| "failed to create pipe")?;
     match fork()? {
         ForkResult::Child => {
             close(rfd).chain_err(|| "could not close rfd")?;
@@ -981,17 +977,16 @@ fn execute_hook(hook: &oci::Hook, state: &oci::State) -> Result<()> {
                     close(rstdin).chain_err(|| "could not close rstdin")?;
                     unsafe {
                         // closes the file descriptor autmotaically
-                        state.to_writer(File::from_raw_fd(wstdin)).chain_err(
-                            || "could not write state",
-                        )?;
+                        state
+                            .to_writer(File::from_raw_fd(wstdin))
+                            .chain_err(|| "could not write state")?;
                     }
                     let (exit_code, sig) = wait_for_child(child)?;
                     if let Some(signal) = sig {
                         // write signal to pipe.
                         let data: &[u8] = &[signal as u8];
-                        write(wfd, data).chain_err(
-                            || "failed to write signal hook",
-                        )?;
+                        write(wfd, data)
+                            .chain_err(|| "failed to write signal hook")?;
                     }
                     close(wfd).chain_err(|| "could not close wfd")?;
                     std::process::exit(exit_code as i32);
@@ -1024,26 +1019,18 @@ fn safe_run_container(
     id: &str,
     rootfs: &str,
     spec: &Spec,
-    init_pid: i32,
+    init_pid: Pid,
     init: bool,
     init_only: bool,
     daemonize: bool,
     csocketfd: RawFd,
     consolefd: RawFd,
     tsocketfd: RawFd,
-) -> Result<(i32)> {
+) -> Result<Pid> {
     let pid = getpid();
     match run_container(
-        id,
-        rootfs,
-        spec,
-        init_pid,
-        init,
-        init_only,
-        daemonize,
-        csocketfd,
-        consolefd,
-        tsocketfd,
+        id, rootfs, spec, init_pid, init, init_only, daemonize, csocketfd,
+        consolefd, tsocketfd,
     ) {
         Err(e) => {
             // if we are the top level thread, kill all children
@@ -1060,14 +1047,14 @@ fn run_container(
     id: &str,
     rootfs: &str,
     spec: &Spec,
-    init_pid: i32,
+    init_pid: Pid,
     mut init: bool,
     mut init_only: bool,
     daemonize: bool,
     csocketfd: RawFd,
     mut consolefd: RawFd,
     tsocketfd: RawFd,
-) -> Result<(i32)> {
+) -> Result<Pid> {
     if let Err(e) = prctl::set_dumpable(false) {
         bail!(format!("set dumpable returned {}", e));
     };
@@ -1077,8 +1064,7 @@ fn run_container(
         if let Err(e) = selinux::setexeccon(&spec.process.selinux_label) {
             warn!(
                 "could not set label to {}: {}",
-                spec.process.selinux_label,
-                e
+                spec.process.selinux_label, e
             );
         };
     }
@@ -1095,23 +1081,20 @@ fn run_container(
     initialize(&NAMESPACES);
     cgroups::init();
 
-    // colect namespaces
+    // collect namespaces
     let mut cf = CloneFlags::empty();
     let mut to_enter = Vec::new();
     let mut enter_pid = false;
     for ns in &linux.namespaces {
         let space = CloneFlags::from_bits_truncate(ns.typ as i32);
-        if space == CLONE_NEWPID {
+        if space == CloneFlags::CLONE_NEWPID {
             enter_pid = true;
         }
         if ns.path.is_empty() {
             cf |= space;
         } else {
-            let fd = open(&*ns.path, OFlag::empty(), Mode::empty()).chain_err(
-                || {
-                    format!("failed to open file for {:?}", space)
-                },
-            )?;
+            let fd = open(&*ns.path, OFlag::empty(), Mode::empty())
+                .chain_err(|| format!("failed to open file for {:?}", space))?;
             to_enter.push((space, fd));
         }
     }
@@ -1119,7 +1102,6 @@ fn run_container(
         init = false;
         init_only = false;
     }
-
 
     let cpath = if linux.cgroups_path == "" {
         format!{"/{}", id}
@@ -1131,7 +1113,7 @@ fn run_container(
     let mut userns = false;
     let rlimits = &spec.process.rlimits;
     // fork for userns and cgroups
-    if cf.contains(CLONE_NEWUSER) {
+    if cf.contains(CloneFlags::CLONE_NEWUSER) {
         bind_devices = true;
         userns = true;
     }
@@ -1142,37 +1124,28 @@ fn run_container(
         };
     }
     let (child_pid, wfd) = fork_first(
-        id,
-        init_pid,
-        enter_pid,
-        init_only,
-        daemonize,
-        userns,
-        linux,
-        rlimits,
-        &cpath,
-        spec,
+        id, init_pid, enter_pid, init_only, daemonize, userns, linux, rlimits,
+        &cpath, spec,
     )?;
 
     // parent returns child pid and exits
-    if child_pid != -1 {
+    if child_pid != Pid::from_raw(-1) {
         return Ok(child_pid);
     }
 
     let mut mount_fd = -1;
     // enter path namespaces
     for &(space, fd) in &to_enter {
-        if space == CLONE_NEWNS {
+        if space == CloneFlags::CLONE_NEWNS {
             // enter mount ns last
             mount_fd = fd;
             continue;
         }
-        setns(fd, space).chain_err(
-            || format!("failed to enter {:?}", space),
-        )?;
+        setns(fd, space).chain_err(|| format!("failed to enter {:?}", space))?;
         close(fd)?;
-        if space == CLONE_NEWUSER {
-            setid(0, 0).chain_err(|| "failed to setid")?;
+        if space == CloneFlags::CLONE_NEWUSER {
+            setid(Uid::from_raw(0), Gid::from_raw(0))
+                .chain_err(|| "failed to setid")?;
             bind_devices = true;
         }
     }
@@ -1185,18 +1158,17 @@ fn run_container(
 
     // unshare other ns
     let chain = || format!("failed to unshare {:?}", cf);
-    unshare(cf & !CLONE_NEWUSER).chain_err(chain)?;
-
+    unshare(cf & !CloneFlags::CLONE_NEWUSER).chain_err(chain)?;
 
     if enter_pid {
         fork_enter_pid(init, daemonize)?;
     };
 
-    if cf.contains(CLONE_NEWUTS) {
+    if cf.contains(CloneFlags::CLONE_NEWUTS) {
         sethostname(&spec.hostname)?;
     }
 
-    if cf.contains(CLONE_NEWNS) {
+    if cf.contains(CloneFlags::CLONE_NEWNS) {
         mounts::init_rootfs(spec, rootfs, &cpath, bind_devices)
             .chain_err(|| "failed to init rootfs")?;
     }
@@ -1208,19 +1180,15 @@ fn run_container(
         write(wfd, data).chain_err(|| "failed to write zero")?;
     }
 
-
     if mount_fd != -1 {
-        setns(mount_fd, CLONE_NEWNS).chain_err(|| {
-            "failed to enter CLONE_NEWNS".to_string()
+        setns(mount_fd, CloneFlags::CLONE_NEWNS).chain_err(|| {
+            "failed to enter CloneFlags::CLONE_NEWNS".to_string()
         })?;
         close(mount_fd)?;
     }
 
-    if cf.contains(CLONE_NEWNS) {
-
-        mounts::pivot_rootfs(&*rootfs).chain_err(
-            || "failed to pivot rootfs",
-        )?;
+    if cf.contains(CloneFlags::CLONE_NEWNS) {
+        mounts::pivot_rootfs(&*rootfs).chain_err(|| "failed to pivot rootfs")?;
 
         // only set sysctls in newns
         for (key, value) in &linux.sysctl {
@@ -1260,15 +1228,9 @@ fn run_container(
         if unsafe { libc::ioctl(consolefd, libc::TIOCSCTTY) } < 0 {
             warn!("could not TIOCSCTTY");
         };
-        dup2(consolefd, 0).chain_err(
-            || "could not dup tty to stdin",
-        )?;
-        dup2(consolefd, 1).chain_err(
-            || "could not dup tty to stdout",
-        )?;
-        dup2(consolefd, 2).chain_err(
-            || "could not dup tty to stderr",
-        )?;
+        dup2(consolefd, 0).chain_err(|| "could not dup tty to stdin")?;
+        dup2(consolefd, 1).chain_err(|| "could not dup tty to stdout")?;
+        dup2(consolefd, 2).chain_err(|| "could not dup tty to stderr")?;
 
         if consolefd > 2 {
             close(consolefd).chain_err(|| "could not close consolefd")?;
@@ -1277,10 +1239,8 @@ fn run_container(
         // NOTE: we may need to fix up the mount of /dev/console
     }
 
-    if cf.contains(CLONE_NEWNS) {
-        mounts::finish_rootfs(spec).chain_err(
-            || "failed to finish rootfs",
-        )?;
+    if cf.contains(CloneFlags::CLONE_NEWNS) {
+        mounts::finish_rootfs(spec).chain_err(|| "failed to finish rootfs")?;
     }
 
     // change to specified working directory
@@ -1291,7 +1251,9 @@ fn run_container(
     debug!("setting ids");
 
     // set uid/gid/groups
-    setid(spec.process.user.uid, spec.process.user.gid)?;
+    let uid = Uid::from_raw(spec.process.user.uid);
+    let gid = Gid::from_raw(spec.process.user.gid);
+    setid(uid, gid)?;
     if !spec.process.user.additional_gids.is_empty() {
         setgroups(&spec.process.user.additional_gids)?;
     }
@@ -1347,12 +1309,12 @@ fn run_container(
     }
 
     do_exec(&spec.process.args[0], &spec.process.args, &spec.process.env)?;
-    Ok(-1)
+    Ok(Pid::from_raw(-1))
 }
 
 fn fork_first(
     id: &str,
-    init_pid: i32,
+    init_pid: Pid,
     enter_pid: bool,
     init_only: bool,
     daemonize: bool,
@@ -1361,10 +1323,11 @@ fn fork_first(
     rlimits: &[LinuxRlimit],
     cpath: &str,
     spec: &Spec,
-) -> Result<(i32, RawFd)> {
+) -> Result<(Pid, RawFd)> {
     let ccond = Cond::new().chain_err(|| "failed to create cond")?;
     let pcond = Cond::new().chain_err(|| "failed to create cond")?;
-    let (rfd, wfd) = pipe2(O_CLOEXEC).chain_err(|| "failed to create pipe")?;
+    let (rfd, wfd) =
+        pipe2(OFlag::O_CLOEXEC).chain_err(|| "failed to create pipe")?;
     match fork()? {
         ForkResult::Child => {
             close(rfd).chain_err(|| "could not close rfd")?;
@@ -1384,14 +1347,14 @@ fn fork_first(
             }
 
             if userns {
-                unshare(CLONE_NEWUSER).chain_err(
-                    || "failed to unshare user",
-                )?;
+                unshare(CloneFlags::CLONE_NEWUSER)
+                    .chain_err(|| "failed to unshare user")?;
             }
             ccond.notify().chain_err(|| "failed to notify parent")?;
             pcond.wait().chain_err(|| "failed to wait for parent")?;
             if userns {
-                setid(0, 0).chain_err(|| "failed to setid")?;
+                setid(Uid::from_raw(0), Gid::from_raw(0))
+                    .chain_err(|| "failed to setid")?;
             }
             // child continues on
         }
@@ -1420,7 +1383,7 @@ fn fork_first(
             if enter_pid {
                 let (_, _) = wait_for_child(child)?;
             }
-            let mut pid = -1;
+            let mut pid = Pid::from_raw(-1);
             wait_for_pipe_zero(rfd, -1)?;
             // get the actual pid of the process from cgroup
             let procs = cgroups::get_procs("cpuset", cpath);
@@ -1436,9 +1399,8 @@ fn fork_first(
                 if let Some(ref hooks) = spec.hooks {
                     let st = state(id, "running", init_pid, &spec.root.path);
                     for h in &hooks.prestart {
-                        execute_hook(h, &st).chain_err(
-                            || "failed to execute prestart hooks",
-                        )?;
+                        execute_hook(h, &st)
+                            .chain_err(|| "failed to execute prestart hooks")?;
                     }
                 }
                 wait_for_pipe_zero(rfd, -1)?;
@@ -1458,12 +1420,12 @@ fn fork_first(
             }
             signals::pass_signals(pid)?;
             let sig = wait_for_pipe_sig(rfd, -1)?;
-            let (exit_code, _) = wait_for_child(Pid::from_raw(pid))?;
+            let (exit_code, _) = wait_for_child(pid)?;
             cgroups::remove(cpath)?;
-            exit(exit_code, sig)?;
+            exit(exit_code as i8, sig)?;
         }
     };
-    Ok((-1, wfd))
+    Ok((Pid::from_raw(-1), wfd))
 }
 
 fn fork_enter_pid(init: bool, daemonize: bool) -> Result<()> {
@@ -1544,10 +1506,9 @@ fn do_init(wfd: RawFd, daemonize: bool) -> Result<()> {
             }
             debug!("all children terminated, exiting with {}", code);
             std::process::exit(code)
-
         }
         debug!("passing {:?} on to children", signal);
-        if let Err(e) = signals::signal_process(-1, signal) {
+        if let Err(e) = signals::signal_process(Pid::from_raw(-1), signal) {
             warn!("failed to signal children, {}", e);
         }
     }
@@ -1555,10 +1516,12 @@ fn do_init(wfd: RawFd, daemonize: bool) -> Result<()> {
 
 fn do_exec(path: &str, args: &[String], env: &[String]) -> Result<()> {
     let p = CString::new(path.to_string()).unwrap();
-    let a: Vec<CString> = args.iter()
+    let a: Vec<CString> = args
+        .iter()
         .map(|s| CString::new(s.to_string()).unwrap_or_default())
         .collect();
-    let env: Vec<CString> = env.iter()
+    let env: Vec<CString> = env
+        .iter()
         .map(|s| CString::new(s.to_string()).unwrap_or_default())
         .collect();
     // execvp doesn't use env for the search path, so we set env manually
@@ -1579,7 +1542,7 @@ fn write_mappings(path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
         data = data + &val;
     }
     if !data.is_empty() {
-        let fd = open(path, O_WRONLY, Mode::empty())?;
+        let fd = open(path, OFlag::O_WRONLY, Mode::empty())?;
         defer!(close(fd).unwrap());
         write(fd, data.as_bytes())?;
     }
@@ -1588,15 +1551,16 @@ fn write_mappings(path: &str, maps: &[LinuxIDMapping]) -> Result<()> {
 
 fn set_sysctl(key: &str, value: &str) -> Result<()> {
     let path = format!{"/proc/sys/{}", key.replace(".", "/")};
-    let fd = match open(&*path, O_RDWR, Mode::empty()) {
-        Err(e) => {
-            if e != Sys(Errno::ENOENT) {
+    let fd = match open(&*path, OFlag::O_RDWR, Mode::empty()) {
+        Err(::nix::Error::Sys(errno)) => {
+            if errno != Errno::ENOENT {
                 let msg = format!("could not set sysctl {} to {}", key, value);
-                Err(e).chain_err(|| msg)?;
+                Err(::nix::Error::Sys(errno)).chain_err(|| msg)?;
             }
             warn!("could not set {} because it doesn't exist", key);
             return Ok(());
         }
+        Err(e) => Err(e)?,
         Ok(fd) => fd,
     };
     defer!(close(fd).unwrap());
@@ -1605,7 +1569,7 @@ fn set_sysctl(key: &str, value: &str) -> Result<()> {
 }
 
 fn reopen_dev_null() -> Result<()> {
-    let null_fd = open("/dev/null", O_WRONLY, Mode::empty())?;
+    let null_fd = open("/dev/null", OFlag::O_WRONLY, Mode::empty())?;
     let null_stat = fstat(null_fd)?;
     defer!(close(null_fd).unwrap());
     for fd in 0..3 {
@@ -1614,8 +1578,7 @@ fn reopen_dev_null() -> Result<()> {
                 if fd == 0 {
                     // close and reopen to get RDONLY
                     close(fd)?;
-                    open("/dev/null", O_RDONLY, Mode::empty())?;
-
+                    open("/dev/null", OFlag::O_RDONLY, Mode::empty())?;
                 } else {
                     // we already have wronly fd, so duplicate it
                     dup2(null_fd, fd)?;
@@ -1633,10 +1596,11 @@ fn wait_for_pipe_vec(
 ) -> Result<(Vec<u8>)> {
     let mut result = Vec::new();
     while result.len() < num {
-        let pfds = &mut [PollFd::new(rfd, POLLIN | POLLHUP)];
+        let pfds =
+            &mut [PollFd::new(rfd, EventFlags::POLLIN | EventFlags::POLLHUP)];
         match poll(pfds, timeout) {
             Err(e) => {
-                if e != Sys(Errno::EINTR) {
+                if e != ::nix::Error::Sys(Errno::EINTR) {
                     return Err(e).chain_err(|| "unable to poll rfd")?;
                 }
                 continue;
@@ -1652,11 +1616,14 @@ fn wait_for_pipe_vec(
             // continue on no events
             continue;
         }
-        if events.unwrap() == POLLNVAL {
+        if events.unwrap() == EventFlags::POLLNVAL {
             let msg = "file descriptor closed unexpectedly".to_string();
             return Err(ErrorKind::PipeClosed(msg).into());
         }
-        if !events.unwrap().intersects(POLLIN | POLLHUP) {
+        if !events
+            .unwrap()
+            .intersects(EventFlags::POLLIN | EventFlags::POLLHUP)
+        {
             // continue on other events (should not happen)
             debug!("got a continue on other events {:?}", events);
             continue;
@@ -1696,17 +1663,20 @@ fn wait_for_pipe_zero(rfd: RawFd, timeout: i32) -> Result<()> {
     Ok(())
 }
 
-fn wait_for_child(child: Pid) -> Result<(i8, Option<Signal>)> {
+fn wait_for_child(child: Pid) -> Result<(i32, Option<Signal>)> {
     loop {
         // wait on all children, but only return if we match child.
-        let result = match waitpid(Some(Pid::from_raw(-1)), None) {
-            Err(e) => {
+        let result = match waitpid(Pid::from_raw(-1), None) {
+            Err(::nix::Error::Sys(errno)) => {
                 // ignore EINTR as it gets sent when we get a SIGCHLD
-                if e == Sys(Errno::EINTR) {
+                if errno == Errno::EINTR {
                     continue;
                 }
                 let msg = format!("could not waitpid on {}", child);
-                return Err(e).chain_err(|| msg)?;
+                return Err(::nix::Error::Sys(errno)).chain_err(|| msg)?;
+            }
+            Err(e) => {
+                return Err(e)?;
             }
             Ok(s) => s,
         };
@@ -1716,7 +1686,7 @@ fn wait_for_child(child: Pid) -> Result<(i8, Option<Signal>)> {
                     continue;
                 }
                 reap_children()?;
-                return Ok((code, None));
+                return Ok((code as i32, None));
             }
             WaitStatus::Signaled(pid, signal, _) => {
                 if child != Pid::from_raw(-1) && pid != child {
@@ -1751,9 +1721,9 @@ fn exit(exit_code: i8, sig: Option<Signal>) -> Result<()> {
 fn reap_children() -> Result<(WaitStatus)> {
     let mut result = WaitStatus::Exited(Pid::from_raw(0), 0);
     loop {
-        match waitpid(Some(Pid::from_raw(-1)), Some(WNOHANG)) {
+        match waitpid(Pid::from_raw(-1), Some(WaitPidFlag::WNOHANG)) {
             Err(e) => {
-                if e != Sys(Errno::ECHILD) {
+                if e != ::nix::Error::Sys(Errno::ECHILD) {
                     return Err(e).chain_err(|| "could not waitpid")?;
                 }
                 // ECHILD means no processes are left
@@ -1770,21 +1740,19 @@ fn reap_children() -> Result<(WaitStatus)> {
     Ok(result)
 }
 
-fn setid(uid: u32, gid: u32) -> Result<()> {
+fn setid(uid: Uid, gid: Gid) -> Result<()> {
     // set uid/gid
     if let Err(e) = prctl::set_keep_capabilities(true) {
         bail!(format!("set keep capabilities returned {}", e));
     };
     {
-        let gid = Gid::from_raw(gid);
         setresgid(gid, gid, gid)?;
     }
     {
-        let uid = Uid::from_raw(uid);
         setresuid(uid, uid, uid)?;
     }
     // if we change from zero, we lose effective caps
-    if uid != 0 {
+    if uid != Uid::from_raw(0) {
         capabilities::reset_effective()?;
     }
     if let Err(e) = prctl::set_keep_capabilities(false) {
@@ -1800,9 +1768,8 @@ fn set_name(name: &str) -> Result<()> {
         Ok(_) => (),
     };
     unsafe {
-        let init = std::ffi::CString::new(name).chain_err(
-            || "invalid process name",
-        )?;
+        let init =
+            std::ffi::CString::new(name).chain_err(|| "invalid process name")?;
         let len = std::ffi::CStr::from_ptr(*ARGV).to_bytes().len();
         // after fork, ARGV points to the thread's local
         // copy of arg0.

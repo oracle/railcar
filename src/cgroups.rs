@@ -1,12 +1,13 @@
 use errors::*;
 use lazy_static::initialize;
+use nix::unistd::Pid;
 use num_traits::identities::Zero;
-use oci::{LinuxResources, LinuxThrottleDevice, LinuxDeviceCgroup};
 use oci::LinuxDeviceType;
+use oci::{LinuxDeviceCgroup, LinuxResources, LinuxThrottleDevice};
 use std::collections::HashMap;
+use std::fs::{create_dir_all, remove_dir, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::string::ToString;
-use std::fs::{File, create_dir_all, remove_dir};
 
 pub fn init() {
     // initialize lazy_static maps
@@ -46,7 +47,6 @@ pub fn apply(
     }
     Ok(())
 }
-
 
 pub fn remove(cgroups_path: &str) -> Result<()> {
     for key in MOUNTS.keys() {
@@ -125,13 +125,11 @@ pub fn path(key: &str, cgroups_path: &str) -> Option<String> {
     } else if rel.unwrap() == "/" {
         Some(format!{"{}{}", &mount.unwrap(), cgroups_path})
     } else {
-        Some(
-            format!{"{}{}{}", &mount.unwrap(), &rel.unwrap(), cgroups_path},
-        )
+        Some(format!{"{}{}{}", &mount.unwrap(), &rel.unwrap(), cgroups_path})
     }
 }
 
-pub fn get_procs(key: &str, cgroups_path: &str) -> Vec<i32> {
+pub fn get_procs(key: &str, cgroups_path: &str) -> Vec<Pid> {
     let mut result = Vec::new();
     if let Some(dir) = path(key, cgroups_path) {
         let path = format!{"{}/cgroup.procs", dir};
@@ -151,10 +149,9 @@ pub fn get_procs(key: &str, cgroups_path: &str) -> Vec<i32> {
                 }
             };
             if let Ok(pid) = l.parse::<i32>() {
-                result.push(pid);
+                result.push(Pid::from_raw(pid));
             }
         }
-
     }
     result
 }
@@ -210,25 +207,25 @@ lazy_static! {
             };
             if let Some(sep) = l.find(" - ") {
                 if l.len() < sep + 10 {
-                    continue
+                    continue;
                 }
-                let key = &l[sep+3..sep+10];
+                let key = &l[sep + 3..sep + 10];
                 if key != "cgroup " && key != "cgroup2" {
-                    continue
+                    continue;
                 }
                 let pre: Vec<&str> = l[..sep].split(' ').collect();
                 if pre.len() != 7 {
                     warn!("mountinfo data is corrupted");
-                    continue
+                    continue;
                 }
-                let post: Vec<&str> = l[sep+3..].split(' ').collect();
+                let post: Vec<&str> = l[sep + 3..].split(' ').collect();
                 if post.len() != 3 {
                     warn!("mountinfo data is corrupted");
-                    continue
+                    continue;
                 }
                 let mut offset = post[2].len();
                 while let Some(o) = post[2][..offset].rfind(',') {
-                    let name = &post[2][o+1..];
+                    let name = &post[2][o + 1..];
                     if PATHS.contains_key(name) {
                         result.insert(name.to_string(), pre[4].to_string());
                         break;

@@ -1,7 +1,7 @@
-use std::process::Command;
 use std::env;
 use std::fs::File;
 use std::io::Read;
+use std::process::Command;
 
 fn main() {
     // static link the musl target

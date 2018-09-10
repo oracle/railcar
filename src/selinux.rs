@@ -1,6 +1,6 @@
 use errors::*;
+use nix::fcntl::{open, OFlag};
 use nix::sys::stat::Mode;
-use nix::fcntl::{open, O_RDWR};
 use nix::unistd::{close, write};
 use nix_ext::lsetxattr;
 use std::ffi::CString;
@@ -8,7 +8,7 @@ use std::ffi::CString;
 const EXEC_PATH: &'static str = "/proc/self/attr/exec";
 
 pub fn setexeccon(label: &str) -> Result<()> {
-    let fd = open(EXEC_PATH, O_RDWR, Mode::empty())?;
+    let fd = open(EXEC_PATH, OFlag::O_RDWR, Mode::empty())?;
     defer!(close(fd).unwrap());
     write(fd, label.as_bytes())?;
     Ok(())

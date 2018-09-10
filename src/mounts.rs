@@ -1,19 +1,20 @@
 use cgroups;
 use errors::*;
-use nix::{Errno, NixPath};
-use nix::Error::Sys;
-use nix::fcntl::{open, O_DIRECTORY, O_RDWR, O_RDONLY, O_CREAT};
+use nix::errno::Errno;
+use nix::fcntl::{open, OFlag};
+use nix::mount::MsFlags;
 use nix::mount::*;
 use nix::sys::stat::{mknod, umask};
-use nix::sys::stat::{Mode, SFlag, S_IFBLK, S_IFCHR, S_IFIFO};
+use nix::sys::stat::{Mode, SFlag};
+use nix::unistd::{chdir, chown, close, getcwd, pivot_root};
 use nix::unistd::{Gid, Uid};
-use nix::unistd::{close, getcwd, chdir, pivot_root, chown};
+use nix::NixPath;
 use nix_ext::fchdir;
-use oci::{Mount, Spec, LinuxDevice, LinuxDeviceType};
+use oci::{LinuxDevice, LinuxDeviceType, Mount, Spec};
 use selinux::setfilecon;
 use std::collections::HashMap;
-use std::fs::{create_dir_all, canonicalize, remove_file};
 use std::fs::OpenOptions;
+use std::fs::{canonicalize, create_dir_all, remove_file};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
@@ -24,33 +25,31 @@ pub fn init_rootfs(
     bind_devices: bool,
 ) -> Result<()> {
     // set namespace propagation
-    let mut flags = MS_REC;
+    let mut flags = MsFlags::MS_REC;
     match spec.linux {
-        Some(ref linux) => {
-            match linux.rootfs_propagation.as_ref() {
-                "shared" => {
-                    flags |= MS_SHARED;
-                    Ok(())
-                }
-                "private" => {
-                    flags |= MS_PRIVATE;
-                    Ok(())
-                }
-                "slave" | "" => {
-                    flags |= MS_SLAVE;
-                    Ok(())
-                }
-                _ => {
-                    let msg = format!(
-                        "invalid propogation value: {}",
-                        linux.rootfs_propagation
-                    );
-                    Err(Error::from(ErrorKind::InvalidSpec(msg)))
-                }
+        Some(ref linux) => match linux.rootfs_propagation.as_ref() {
+            "shared" => {
+                flags |= MsFlags::MS_SHARED;
+                Ok(())
             }
-        }
+            "private" => {
+                flags |= MsFlags::MS_PRIVATE;
+                Ok(())
+            }
+            "slave" | "" => {
+                flags |= MsFlags::MS_SLAVE;
+                Ok(())
+            }
+            _ => {
+                let msg = format!(
+                    "invalid propogation value: {}",
+                    linux.rootfs_propagation
+                );
+                Err(Error::from(ErrorKind::InvalidSpec(msg)))
+            }
+        },
         None => {
-            flags |= MS_SLAVE;
+            flags |= MsFlags::MS_SLAVE;
             Ok(())
         }
     }?;
@@ -62,7 +61,7 @@ pub fn init_rootfs(
         Some(rootfs),
         rootfs,
         None::<&str>,
-        MS_BIND | MS_REC,
+        MsFlags::MS_BIND | MsFlags::MS_REC,
         None::<&str>,
     )?;
 
@@ -84,7 +83,7 @@ pub fn init_rootfs(
             mount_from(
                 m,
                 rootfs,
-                flags & !MS_RDONLY,
+                flags & !MsFlags::MS_RDONLY,
                 &data,
                 &linux.mount_label,
             )?;
@@ -107,12 +106,14 @@ pub fn init_rootfs(
 }
 
 pub fn pivot_rootfs<P: ?Sized + NixPath>(path: &P) -> Result<()> {
-    let oldroot = open("/", O_DIRECTORY | O_RDONLY, Mode::empty())?;
+    let oldroot =
+        open("/", OFlag::O_DIRECTORY | OFlag::O_RDONLY, Mode::empty())?;
     defer!(close(oldroot).unwrap());
-    let newroot = open(path, O_DIRECTORY | O_RDONLY, Mode::empty())?;
+    let newroot =
+        open(path, OFlag::O_DIRECTORY | OFlag::O_RDONLY, Mode::empty())?;
     defer!(close(newroot).unwrap());
     pivot_root(path, path)?;
-    umount2("/", MNT_DETACH)?;
+    umount2("/", MntFlags::MNT_DETACH)?;
     fchdir(newroot)?;
     Ok(())
 }
@@ -131,12 +132,12 @@ pub fn finish_rootfs(spec: &Spec) -> Result<()> {
     for m in &spec.mounts {
         if m.destination == "/dev" {
             let (flags, _) = parse_mount(m);
-            if flags.contains(MS_RDONLY) {
+            if flags.contains(MsFlags::MS_RDONLY) {
                 mount(
                     Some("/dev"),
                     "/dev",
                     None::<&str>,
-                    flags | MS_REMOUNT,
+                    flags | MsFlags::MS_REMOUNT,
                     None::<&str>,
                 )?;
             }
@@ -144,7 +145,10 @@ pub fn finish_rootfs(spec: &Spec) -> Result<()> {
     }
 
     if spec.root.readonly {
-        let flags = MS_BIND | MS_RDONLY | MS_NODEV | MS_REMOUNT;
+        let flags = MsFlags::MS_BIND
+            | MsFlags::MS_RDONLY
+            | MsFlags::MS_NODEV
+            | MsFlags::MS_REMOUNT;
         mount(Some("/"), "/", None::<&str>, flags, None::<&str>)?;
     }
 
@@ -152,42 +156,43 @@ pub fn finish_rootfs(spec: &Spec) -> Result<()> {
     Ok(())
 }
 
+#[cfg_attr(rustfmt, rustfmt_skip)]
 lazy_static! {
     static ref OPTIONS: HashMap<&'static str, (bool, MsFlags)> = {
         let mut m = HashMap::new();
         m.insert("defaults",      (false, MsFlags::empty()));
-        m.insert("ro",            (false, MS_RDONLY));
-        m.insert("rw",            (true, MS_RDONLY));
-        m.insert("suid",          (true, MS_NOSUID));
-        m.insert("nosuid",        (false, MS_NOSUID));
-        m.insert("dev",           (true, MS_NODEV));
-        m.insert("nodev",         (false, MS_NODEV));
-        m.insert("exec",          (true, MS_NOEXEC));
-        m.insert("noexec",        (false, MS_NOEXEC));
-        m.insert("sync",          (false, MS_SYNCHRONOUS));
-        m.insert("async",         (true, MS_SYNCHRONOUS));
-        m.insert("dirsync",       (false, MS_DIRSYNC));
-        m.insert("remount",       (false, MS_REMOUNT));
-        m.insert("mand",          (false, MS_MANDLOCK));
-        m.insert("nomand",        (true, MS_MANDLOCK));
-        m.insert("atime",         (true, MS_NOATIME));
-        m.insert("noatime",       (false, MS_NOATIME));
-        m.insert("diratime",      (true, MS_NODIRATIME));
-        m.insert("nodiratime",    (false, MS_NODIRATIME));
-        m.insert("bind",          (false, MS_BIND));
-        m.insert("rbind",         (false, MS_BIND | MS_REC));
-        m.insert("unbindable",    (false, MS_UNBINDABLE));
-        m.insert("runbindable",   (false, MS_UNBINDABLE | MS_REC));
-        m.insert("private",       (false, MS_PRIVATE));
-        m.insert("rprivate",      (false, MS_PRIVATE | MS_REC));
-        m.insert("shared",        (false, MS_SHARED));
-        m.insert("rshared",       (false, MS_SHARED | MS_REC));
-        m.insert("slave",         (false, MS_SLAVE));
-        m.insert("rslave",        (false, MS_SLAVE | MS_REC));
-        m.insert("relatime",      (false, MS_RELATIME));
-        m.insert("norelatime",    (true, MS_RELATIME));
-        m.insert("strictatime",   (false, MS_STRICTATIME));
-        m.insert("nostrictatime", (true, MS_STRICTATIME));
+        m.insert("ro",            (false, MsFlags::MS_RDONLY));
+        m.insert("rw",            (true,  MsFlags::MS_RDONLY));
+        m.insert("suid",          (true,  MsFlags::MS_NOSUID));
+        m.insert("nosuid",        (false, MsFlags::MS_NOSUID));
+        m.insert("dev",           (true,  MsFlags::MS_NODEV));
+        m.insert("nodev",         (false, MsFlags::MS_NODEV));
+        m.insert("exec",          (true,  MsFlags::MS_NOEXEC));
+        m.insert("noexec",        (false, MsFlags::MS_NOEXEC));
+        m.insert("sync",          (false, MsFlags::MS_SYNCHRONOUS));
+        m.insert("async",         (true,  MsFlags::MS_SYNCHRONOUS));
+        m.insert("dirsync",       (false, MsFlags::MS_DIRSYNC));
+        m.insert("remount",       (false, MsFlags::MS_REMOUNT));
+        m.insert("mand",          (false, MsFlags::MS_MANDLOCK));
+        m.insert("nomand",        (true,  MsFlags::MS_MANDLOCK));
+        m.insert("atime",         (true,  MsFlags::MS_NOATIME));
+        m.insert("noatime",       (false, MsFlags::MS_NOATIME));
+        m.insert("diratime",      (true,  MsFlags::MS_NODIRATIME));
+        m.insert("nodiratime",    (false, MsFlags::MS_NODIRATIME));
+        m.insert("bind",          (false, MsFlags::MS_BIND));
+        m.insert("rbind",         (false, MsFlags::MS_BIND | MsFlags::MS_REC));
+        m.insert("unbindable",    (false, MsFlags::MS_UNBINDABLE));
+        m.insert("runbindable",   (false, MsFlags::MS_UNBINDABLE | MsFlags::MS_REC));
+        m.insert("private",       (false, MsFlags::MS_PRIVATE));
+        m.insert("rprivate",      (false, MsFlags::MS_PRIVATE | MsFlags::MS_REC));
+        m.insert("shared",        (false, MsFlags::MS_SHARED));
+        m.insert("rshared",       (false, MsFlags::MS_SHARED | MsFlags::MS_REC));
+        m.insert("slave",         (false, MsFlags::MS_SLAVE));
+        m.insert("rslave",        (false, MsFlags::MS_SLAVE | MsFlags::MS_REC));
+        m.insert("relatime",      (false, MsFlags::MS_RELATIME));
+        m.insert("norelatime",    (true,  MsFlags::MS_RELATIME));
+        m.insert("strictatime",   (false, MsFlags::MS_STRICTATIME));
+        m.insert("nostrictatime", (true,  MsFlags::MS_STRICTATIME));
         m
     };
 }
@@ -206,7 +211,7 @@ fn mount_cgroups(
         destination: m.destination.clone(),
         options: Vec::new(),
     };
-    let cflags = MS_NOEXEC | MS_NOSUID | MS_NODEV;
+    let cflags = MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV;
     // mount tmpfs for mounts
     mount_from(&cm, rootfs, cflags, "", label)?;
     for (key, mount_path) in cgroups::MOUNTS.iter() {
@@ -234,7 +239,13 @@ fn mount_cgroups(
             destination: dest,
             options: Vec::new(),
         };
-        mount_from(&bm, rootfs, flags | MS_BIND | MS_REC, data, label)?;
+        mount_from(
+            &bm,
+            rootfs,
+            flags | MsFlags::MS_BIND | MsFlags::MS_REC,
+            data,
+            label,
+        )?;
         for k in key.split(',') {
             if k != key {
                 // try to create a symlink for combined strings
@@ -242,16 +253,15 @@ fn mount_cgroups(
                 symlink(key, &dest)?;
             }
         }
-
     }
     // remount readonly if necessary
-    if flags.contains(MS_RDONLY) {
+    if flags.contains(MsFlags::MS_RDONLY) {
         let dest = format!{"{}{}", rootfs, &m.destination};
         mount(
             Some(&*dest),
             &*dest,
             None::<&str>,
-            cflags | MS_BIND | MS_REMOUNT,
+            cflags | MsFlags::MS_BIND | MsFlags::MS_REMOUNT,
             None::<&str>,
         )?;
     }
@@ -301,10 +311,7 @@ fn mount_from(
 
     debug!(
         "mounting {} to {} as {} with data '{}'",
-        &m.source,
-        &m.destination,
-        &m.typ,
-        &d
+        &m.source, &m.destination, &m.typ, &d
     );
 
     let src = if m.typ == "bind" {
@@ -319,9 +326,8 @@ fn mount_from(
         }
         // make sure file exists so we can bind over it
         if src.is_file() {
-            if let Err(e) = OpenOptions::new().create(true).write(true).open(
-                &dest,
-            )
+            if let Err(e) =
+                OpenOptions::new().create(true).write(true).open(&dest)
             {
                 debug!("ignoring touch fail of {:?}: {}", &dest, e)
             }
@@ -334,52 +340,49 @@ fn mount_from(
         PathBuf::from(&m.source)
     };
 
-    if let Err(e) = mount(
-        Some(&*src),
-        &*dest,
-        Some(&*m.typ),
-        flags,
-        Some(&*d),
-    )
+    if let Err(::nix::Error::Sys(errno)) =
+        mount(Some(&*src), &*dest, Some(&*m.typ), flags, Some(&*d))
     {
-        if e != Sys(Errno::EINVAL) {
+        if errno != Errno::EINVAL {
             let chain = || format!("mount of {} failed", &m.destination);
-            return Err(e).chain_err(chain)?;
+            return Err(::nix::Error::Sys(errno)).chain_err(chain)?;
         }
         // try again without mount label
         mount(Some(&*src), &*dest, Some(&*m.typ), flags, Some(data))?;
         // warn if label cannot be set
         if let Err(e) = setfilecon(&dest, label) {
             warn!{"could not set mount label of {} to {}: {}",
-                  &m.destination, &label, e};
+            &m.destination, &label, e};
         }
     }
-    // remount bind mounts if they have other flags (like MS_RDONLY)
-    if flags.contains(MS_BIND) &&
-        flags.intersects(
-            !(MS_REC | MS_REMOUNT | MS_BIND | MS_PRIVATE | MS_SHARED |
-                  MS_SLAVE),
-        )
-    {
+    // remount bind mounts if they have other flags (like MsFlags::MS_RDONLY)
+    if flags.contains(MsFlags::MS_BIND)
+        && flags.intersects(
+            !(MsFlags::MS_REC
+                | MsFlags::MS_REMOUNT
+                | MsFlags::MS_BIND
+                | MsFlags::MS_PRIVATE
+                | MsFlags::MS_SHARED
+                | MsFlags::MS_SLAVE),
+        ) {
         let chain = || format!("remount of {} failed", &dest);
         mount(
             Some(&*dest),
             &*dest,
             None::<&str>,
-            flags | MS_REMOUNT,
+            flags | MsFlags::MS_REMOUNT,
             None::<&str>,
         ).chain_err(chain)?;
     }
     Ok(())
 }
 
-static SYMLINKS: &'static [(&'static str, &'static str)] =
-    &[
-        ("/proc/self/fd", "dev/fd"),
-        ("/proc/self/fd/0", "dev/stdin"),
-        ("/proc/self/fd/1", "dev/stdout"),
-        ("/proc/self/fd/2", "dev/stderr"),
-    ];
+static SYMLINKS: &'static [(&'static str, &'static str)] = &[
+    ("/proc/self/fd", "dev/fd"),
+    ("/proc/self/fd/0", "dev/stdin"),
+    ("/proc/self/fd/1", "dev/stdout"),
+    ("/proc/self/fd/2", "dev/stderr"),
+];
 
 fn default_symlinks() -> Result<()> {
     if Path::new("/proc/kcore").exists() {
@@ -420,15 +423,17 @@ fn ensure_ptmx() -> Result<()> {
 }
 
 fn makedev(major: u64, minor: u64) -> u64 {
-    (minor & 0xff) | ((major & 0xfff) << 8) | ((minor & !0xff) << 12) |
-        ((major & !0xfff) << 32)
+    (minor & 0xff)
+        | ((major & 0xfff) << 8)
+        | ((minor & !0xff) << 12)
+        | ((major & !0xfff) << 32)
 }
 
 fn to_sflag(t: LinuxDeviceType) -> Result<SFlag> {
     Ok(match t {
-        LinuxDeviceType::b => S_IFBLK,
-        LinuxDeviceType::c | LinuxDeviceType::u => S_IFCHR,
-        LinuxDeviceType::p => S_IFIFO,
+        LinuxDeviceType::b => SFlag::S_IFBLK,
+        LinuxDeviceType::c | LinuxDeviceType::u => SFlag::S_IFCHR,
+        LinuxDeviceType::p => SFlag::S_IFIFO,
         LinuxDeviceType::a => {
             let msg = "type a is not allowed for linux device".to_string();
             bail!(ErrorKind::InvalidSpec(msg));
@@ -456,7 +461,7 @@ fn mknod_dev(dev: &LinuxDevice) -> Result<()> {
 fn bind_dev(dev: &LinuxDevice) -> Result<()> {
     let fd = open(
         &dev.path[1..],
-        O_RDWR | O_CREAT,
+        OFlag::O_RDWR | OFlag::O_CREAT,
         Mode::from_bits_truncate(0o644),
     )?;
     close(fd)?;
@@ -465,7 +470,7 @@ fn bind_dev(dev: &LinuxDevice) -> Result<()> {
         Some(&*dev.path),
         &dev.path[1..],
         None::<&str>,
-        MS_BIND,
+        MsFlags::MS_BIND,
         None::<&str>,
     )?;
     Ok(())
@@ -476,20 +481,21 @@ fn mask_path(path: &str) -> Result<()> {
         let msg = format!("invalid maskedPath: {}", path);
         return Err(ErrorKind::InvalidSpec(msg).into());
     }
-    if let Err(e) = mount(
+
+    if let Err(::nix::Error::Sys(errno)) = mount(
         Some("/dev/null"),
         path,
         None::<&str>,
-        MS_BIND,
+        MsFlags::MS_BIND,
         None::<&str>,
-    )
-    {
+    ) {
         // ignore ENOENT and ENOTDIR: path to mask doesn't exist
-        if e != Sys(Errno::ENOENT) && e != Sys(Errno::ENOTDIR) {
+        if errno != Errno::ENOENT && errno != Errno::ENOTDIR {
             let msg = format!("could not mask {}", path);
-            Err(e).chain_err(|| msg)?;
+            Err(::nix::Error::Sys(errno)).chain_err(|| msg)?;
+        } else {
+            debug!("ignoring mask of {} because it doesn't exist", path);
         }
-        debug!("ignoring mask of {} because it doesn't exist", path);
     }
     Ok(())
 }
@@ -503,23 +509,32 @@ fn readonly_path(path: &str) -> Result<()> {
         Some(&path[1..]),
         path,
         None::<&str>,
-        MS_BIND | MS_REC,
+        MsFlags::MS_BIND | MsFlags::MS_REC,
         None::<&str>,
-    )
-    {
-        // ignore ENOENT: path to make read only doesn't exist
-        if e != Sys(Errno::ENOENT) {
-            let msg = format!("could not readonly {}", path);
-            Err(e).chain_err(|| msg)?;
+    ) {
+        match e {
+            ::nix::Error::Sys(errno) => {
+                // ignore ENOENT: path to make read only doesn't exist
+                if errno != Errno::ENOENT {
+                    let msg = format!("could not readonly {}", path);
+                    Err(e).chain_err(|| msg)?;
+                }
+                debug!("ignoring remount of {} because it doesn't exist", path);
+                return Ok(());
+            }
+            _ => {
+                unreachable!("Supposedly unreachable error {:?}", e);
+            }
         }
-        debug!("ignoring remount of {} because it doesn't exist", path);
-        return Ok(());
     }
     mount(
         Some(&path[1..]),
         &path[1..],
         None::<&str>,
-        MS_BIND | MS_REC | MS_RDONLY | MS_REMOUNT,
+        MsFlags::MS_BIND
+            | MsFlags::MS_REC
+            | MsFlags::MS_RDONLY
+            | MsFlags::MS_REMOUNT,
         None::<&str>,
     )?;
     Ok(())
